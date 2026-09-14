@@ -83,6 +83,19 @@ export function signalFunctionName(
   return typeof value === "string" ? value : value.name;
 }
 
+export function functionInputTypes(
+  value: unknown,
+): readonly common.TypeInfo[] | undefined {
+  if (typeof value === "function") {
+    return common.extractWorkflowTypeAndConfig(value as common.Workflow).typeInfo
+      ?.inputTypes;
+  }
+  if (typeof value === "object" && value !== null) {
+    return (value as common.SignalDefinition<any[]>).typeInfo?.inputTypes;
+  }
+  return undefined;
+}
+
 export function taskQueueFromProto(
   proto: temporal.api.taskqueue.v1.ITaskQueue,
 ): string {
@@ -143,8 +156,17 @@ function configuredPayloadConverter(): common.PayloadConverter {
 /** Convert application values to the protobuf payload-list representation. */
 export function payloadsToProto(
   values: ReadonlyArray<unknown>,
+  typeInfo?: readonly common.TypeInfo[],
 ): temporal.api.common.v1.IPayloads {
-  return { payloads: common.toPayloads(configuredPayloadConverter(), ...values) ?? [] };
+  return {
+    payloads:
+      common.toPayloadsWithContext(
+        configuredPayloadConverter(),
+        undefined,
+        Array.from(values),
+        typeInfo,
+      ) ?? [],
+  };
 }
 
 /** Convert a protobuf payload-list representation to application values. */
