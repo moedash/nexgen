@@ -8,6 +8,7 @@ import {
   workflowTypeFromProto,
   workflowTypeToProto,
   signalFunctionName,
+  functionInputTypes,
   taskQueueFromProto,
   taskQueueToProto,
   workflowNamespace,
