@@ -452,7 +452,8 @@ export function signalWithStartWorkflowRequestToProto<
     | null
     | undefined,
 ):
-  temporal.api.workflowservice.v1.ISignalWithStartWorkflowExecutionRequest | undefined {
+  | temporal.api.workflowservice.v1.ISignalWithStartWorkflowExecutionRequest
+  | undefined {
   if (model == null) {
     return undefined;
   }

@@ -68,7 +68,8 @@ export const categoryTransferTypeConverter =
       }
 
       let children: Category[] | undefined = undefined as unknown as
-        Category[] | undefined;
+        | Category[]
+        | undefined;
       if (
         Object.prototype.hasOwnProperty.call(raw, "children") &&
         raw["children"] === null

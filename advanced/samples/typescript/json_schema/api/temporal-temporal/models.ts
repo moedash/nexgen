@@ -163,7 +163,8 @@ export const temporalTransferTypeConverter =
       }
 
       let updatedAt: Temporal.ZonedDateTime | undefined = undefined as unknown as
-        Temporal.ZonedDateTime | undefined;
+        | Temporal.ZonedDateTime
+        | undefined;
       if (
         Object.prototype.hasOwnProperty.call(raw, "updatedAt") &&
         raw["updatedAt"] === null
@@ -185,7 +186,8 @@ export const temporalTransferTypeConverter =
       }
 
       let expiresOn: Temporal.PlainDate | undefined = undefined as unknown as
-        Temporal.PlainDate | undefined;
+        | Temporal.PlainDate
+        | undefined;
       if (
         Object.prototype.hasOwnProperty.call(raw, "expiresOn") &&
         raw["expiresOn"] === null
@@ -228,7 +230,8 @@ export const temporalTransferTypeConverter =
       }
 
       let retryDelay: Temporal.Duration | undefined = undefined as unknown as
-        Temporal.Duration | undefined;
+        | Temporal.Duration
+        | undefined;
       if (
         Object.prototype.hasOwnProperty.call(raw, "retryDelay") &&
         raw["retryDelay"] === null
@@ -271,7 +274,9 @@ export const temporalTransferTypeConverter =
       }
 
       let archivedOn: Temporal.PlainDate | null | undefined = undefined as unknown as
-        Temporal.PlainDate | null | undefined;
+        | Temporal.PlainDate
+        | null
+        | undefined;
       if (Object.prototype.hasOwnProperty.call(raw, "archivedOn")) {
         if (raw["archivedOn"] === null) {
           archivedOn = null;

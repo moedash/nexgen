@@ -29,7 +29,9 @@ export interface StartWorkflowResult {
 
 export function startWorkflowResultFromProto(
   proto:
-    temporal.api.workflowservice.v1.IStartWorkflowExecutionResponse | null | undefined,
+    | temporal.api.workflowservice.v1.IStartWorkflowExecutionResponse
+    | null
+    | undefined,
 ): StartWorkflowResult | undefined {
   if (proto == null) {
     return undefined;
@@ -73,7 +75,9 @@ export interface StartWorkflowRequest {
 
 export function startWorkflowRequestFromProto(
   proto:
-    temporal.api.workflowservice.v1.IStartWorkflowExecutionRequest | null | undefined,
+    | temporal.api.workflowservice.v1.IStartWorkflowExecutionRequest
+    | null
+    | undefined,
 ): StartWorkflowRequest | undefined {
   if (proto == null) {
     return undefined;

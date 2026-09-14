@@ -96,7 +96,9 @@ export interface FailureContainer {
 
 export function failureContainerFromProto(
   proto:
-    temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes | null | undefined,
+    | temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes
+    | null
+    | undefined,
 ): FailureContainer | undefined {
   if (proto == null) {
     return undefined;
