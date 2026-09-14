@@ -42,7 +42,8 @@ export async function typeRoundtripCaller(): Promise<{
   });
   const failureRoundTrip = await failureHandle.result();
   const applicationFailure = failureRoundTrip.failure as
-    common.ApplicationFailure | undefined;
+    | common.ApplicationFailure
+    | undefined;
 
   return {
     failureCauseMessage: applicationFailure?.cause?.message,
