@@ -653,15 +653,14 @@ fn samples_python_root(root: &Path) -> PathBuf {
 }
 
 fn input_path(root: &Path, example_id: &str) -> PathBuf {
-    let flat_path = root
-        .join("advanced/samples/inputs")
-        .join(format!("{example_id}.wit"));
+    let input_root = root.join("advanced/samples/inputs");
+    let flat_path = input_root.join(format!("{example_id}.wit"));
     if flat_path.is_file() {
         flat_path
     } else {
-        root.join("advanced/samples/inputs")
-            .join(example_id)
-            .join("main.wit")
+        input_root
+            .join("system-nexus")
+            .join(format!("{example_id}.wit"))
     }
 }
 
