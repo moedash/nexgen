@@ -52,7 +52,7 @@ For the beginner-friendly JSON Schema definitions samples, see
 
 ### `workflow-service`
 
-- WIT: [`inputs/workflow-service.wit`](inputs/workflow-service.wit)
+- WIT: [`inputs/system-nexus/workflow-service.wit`](inputs/system-nexus/workflow-service.wit)
 - .NET: [`dotnet/wit/workflow-service/`](dotnet/wit/workflow-service/)
 - Go: [`go/workflowservice/`](go/workflowservice/)
 - Python: [`python/wit/workflow_service/`](python/wit/workflow_service/), [`python/tests/test_workflow_service.py`](python/tests/test_workflow_service.py)

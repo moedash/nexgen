@@ -218,20 +218,12 @@ pub fn build_json_examples(request: &BuildExamplesRequest) -> Result<()> {
 
 fn discover_example_ids(repo_root: &Path, language: Language) -> Result<Vec<String>> {
     let input_root = repo_root.join("advanced/samples/inputs");
-    let mut ids = fs::read_dir(&input_root)
-        .map_err(|source| Error::ReadFile {
-            path: input_root,
-            source,
-        })?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            let id = if path.is_file() {
-                path.file_stem()?.to_string_lossy().into_owned()
-            } else if path.join("main.wit").is_file() {
-                path.file_name()?.to_string_lossy().into_owned()
-            } else {
-                return None;
-            };
+    let mut input_paths = Vec::new();
+    discover_example_input_paths(&input_root, &mut input_paths)?;
+    let mut ids = input_paths
+        .into_iter()
+        .filter_map(|path| {
+            let id = example_id_for_input(&path)?;
             example_output_path(repo_root, language, &id)
                 .is_dir()
                 .then_some(id)
@@ -239,6 +231,33 @@ fn discover_example_ids(repo_root: &Path, language: Language) -> Result<Vec<Stri
         .collect::<Vec<_>>();
     ids.sort();
     Ok(ids)
+}
+
+fn discover_example_input_paths(path: &Path, inputs: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(path).map_err(|source| Error::ReadFile {
+        path: path.to_path_buf(),
+        source,
+    })? {
+        let path = entry
+            .map_err(|source| Error::ReadFile {
+                path: path.to_path_buf(),
+                source,
+            })?
+            .path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|name| name == "deps") {
+                continue;
+            }
+            discover_example_input_paths(&path, inputs)?;
+        } else if path.extension().is_some_and(|extension| extension == "wit") {
+            inputs.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn example_id_for_input(input_path: &Path) -> Option<String> {
+    Some(input_path.file_stem()?.to_string_lossy().into_owned())
 }
 
 fn validate_example_ids(
@@ -331,10 +350,10 @@ fn ensure_typescript_dependencies(cwd: &Path) -> Result<()> {
     if cwd.join("node_modules").exists() {
         return Ok(());
     }
-    let command = "npm install --no-fund --no-audit".to_string();
+    let command = "npm ci --no-fund --no-audit".to_string();
     let status = ProcessCommand::new("npm")
         .current_dir(cwd)
-        .args(["install", "--no-fund", "--no-audit"])
+        .args(["ci", "--no-fund", "--no-audit"])
         .status()
         .map_err(|source| Error::RunCommand {
             cwd: cwd.to_path_buf(),
@@ -385,10 +404,13 @@ fn build_example(repo_root: &Path, language: Language, example_id: &str) -> Resu
     let generate_request = GenerateRequest {
         config: NexgenConfig {
             mode: GenerationMode::NativeApi,
-            system_nexus: matches!(
-                language,
-                Language::Dotnet | Language::Python | Language::TypeScript
-            ) && example_id == "workflow-service",
+            system_nexus: input_path
+                .strip_prefix(repo_root.join("advanced/samples/inputs"))
+                .is_ok_and(|relative| {
+                    relative
+                        .components()
+                        .any(|component| component.as_os_str() == "system-nexus")
+                }),
         },
         language,
         input_paths,
@@ -478,16 +500,16 @@ fn advanced_language_root(root: &Path, language: Language) -> PathBuf {
     root.join("advanced/samples").join(language.as_str())
 }
 fn example_input_path(root: &Path, id: &str) -> PathBuf {
-    let flat = root
-        .join("advanced/samples/inputs")
-        .join(format!("{id}.wit"));
-    if flat.is_file() {
-        flat
-    } else {
-        root.join("advanced/samples/inputs")
-            .join(id)
-            .join("main.wit")
+    let input_root = root.join("advanced/samples/inputs");
+    let mut inputs = Vec::new();
+    if discover_example_input_paths(&input_root, &mut inputs).is_ok()
+        && let Some(path) = inputs
+            .into_iter()
+            .find(|path| example_id_for_input(path).is_some_and(|input_id| input_id == id))
+    {
+        return path;
     }
+    input_root.join(format!("{id}.wit"))
 }
 fn json_example_input_path(root: &Path, id: &str) -> PathBuf {
     let input_root = root.join("samples/schemas");

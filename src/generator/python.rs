@@ -7846,7 +7846,7 @@ mod tests {
     use crate::spec::{LanguageImportSpec, LanguageImportStyle};
 
     fn sample_input_path(root: &std::path::Path) -> PathBuf {
-        root.join("advanced/samples/inputs/workflow-service.wit")
+        root.join("advanced/samples/inputs/system-nexus/workflow-service.wit")
     }
 
     fn start_workflow_input_path(root: &std::path::Path) -> PathBuf {
