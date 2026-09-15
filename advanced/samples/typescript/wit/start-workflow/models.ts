@@ -86,7 +86,7 @@ export function startWorkflowRequestFromProto(
     workflow: requiredField(
       workflowTypeFromProto(
         requiredField(proto.workflowType, "StartWorkflowRequest", "workflow"),
-      ) as string,
+      ),
       "StartWorkflowRequest",
       "workflow",
     ),
@@ -98,14 +98,14 @@ export function startWorkflowRequestFromProto(
     taskQueue: requiredField(
       taskQueueFromProto(
         requiredField(proto.taskQueue, "StartWorkflowRequest", "taskQueue"),
-      ) as string,
+      ),
       "StartWorkflowRequest",
       "taskQueue",
     ),
     workflowStartDelay:
       proto.workflowStartDelay == null
         ? undefined
-        : (durationFromProto(proto.workflowStartDelay) as common.Duration),
+        : durationFromProto(proto.workflowStartDelay),
     namespace: requiredField(
       proto.namespace === "" ? undefined : proto.namespace,
       "sourced field",
@@ -208,7 +208,7 @@ export function cancelWorkflowRequestFromProto(
           "CancelWorkflowRequest",
           "workflowExecution",
         ),
-      ) as WorkflowExecution,
+      ),
       "CancelWorkflowRequest",
       "workflowExecution",
     ),

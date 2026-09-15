@@ -41,24 +41,19 @@ export function activityOptionsFromProto(
   }
   return {
     taskQueue:
-      proto.taskQueue == null
-        ? undefined
-        : (taskQueueFromProto(proto.taskQueue) as string),
+      proto.taskQueue == null ? undefined : taskQueueFromProto(proto.taskQueue),
     retryPolicy: requiredField(
       retryPolicyFromProto(
         requiredField(proto.retryPolicy, "ActivityOptions", "retryPolicy"),
-      ) as common.RetryPolicy,
+      ),
       "ActivityOptions",
       "retryPolicy",
     ),
     scheduleToCloseTimeout:
       proto.scheduleToCloseTimeout == null
         ? undefined
-        : (durationFromProto(proto.scheduleToCloseTimeout) as common.Duration),
-    priority:
-      proto.priority == null
-        ? undefined
-        : (priorityFromProto(proto.priority) as common.Priority),
+        : durationFromProto(proto.scheduleToCloseTimeout),
+    priority: proto.priority == null ? undefined : priorityFromProto(proto.priority),
   };
 }
 
@@ -104,8 +99,7 @@ export function failureContainerFromProto(
     return undefined;
   }
   return {
-    failure:
-      proto.failure == null ? undefined : (failureFromProto(proto.failure) as Error),
+    failure: proto.failure == null ? undefined : failureFromProto(proto.failure),
   };
 }
 

@@ -62,7 +62,7 @@ export function retryPolicyToProto(
 
 export function workflowTypeFromProto(
   proto: temporal.api.common.v1.IWorkflowType,
-): string | common.Workflow {
+): string {
   return proto.name ?? "";
 }
 
