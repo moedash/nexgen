@@ -1108,7 +1108,7 @@ impl<'a> ApiPlanner<'a> {
                 ),
                 doc,
                 optional: false,
-                from_wire_expr: annotated_from_wire_expr(field, &resolved_type, from_wire_expr),
+                from_wire_expr,
                 to_wire_expr: required_to_wire_expr(
                     &resolved_type,
                     &owner_name,
@@ -1126,7 +1126,7 @@ impl<'a> ApiPlanner<'a> {
             annotation: Self::typescript_field_annotation(field, resolved_type.annotation.clone()),
             doc,
             optional: true,
-            from_wire_expr: annotated_from_wire_expr(field, &resolved_type, from_wire_expr),
+            from_wire_expr,
             to_wire_expr: optional_to_wire_expr(&resolved_type, &generated_field_name),
             flattened_fields: Vec::new(),
             requirements: resolved_type.requirements,
@@ -1666,15 +1666,11 @@ fn required_from_wire_expr(
 
     match resolved_type.kind {
         ResolvedFieldKind::Message => required_field_expr(
-            &format!(
-                "({}) as {}",
-                resolved_type
-                    .wire_conversion
-                    .as_ref()
-                    .expect("message conversion should be present")
-                    .from_wire_expr(&required_wire_expr),
-                resolved_type.annotation
-            ),
+            &resolved_type
+                .wire_conversion
+                .as_ref()
+                .expect("message conversion should be present")
+                .from_wire_expr(&required_wire_expr),
             owner_name,
             generated_field_name,
         ),
@@ -1708,13 +1704,12 @@ fn required_to_wire_expr(
 fn optional_from_wire_expr(resolved_type: &ResolvedFieldType, wire_value_expr: &str) -> String {
     match resolved_type.kind {
         ResolvedFieldKind::Message => format!(
-            "{wire_value_expr} == null ? undefined : ({}) as {}",
+            "{wire_value_expr} == null ? undefined : {}",
             resolved_type
                 .wire_conversion
                 .as_ref()
                 .expect("message conversion should be present")
-                .from_wire_expr(wire_value_expr),
-            resolved_type.annotation
+                .from_wire_expr(wire_value_expr)
         ),
         ResolvedFieldKind::Enum => format!(
             "{wire_value_expr} == null ? undefined : {}",
@@ -1730,7 +1725,7 @@ fn function_field_from_wire_expr(
     wire_value_expr: &str,
     generated_field_name: &str,
     field: &RecordFieldSpec<PlannedFamily>,
-    function: &FunctionFieldSpec<PlannedFamily>,
+    _function: &FunctionFieldSpec<PlannedFamily>,
 ) -> String {
     let expression = if field.required {
         required_from_wire_expr(
@@ -1743,34 +1738,7 @@ fn function_field_from_wire_expr(
     } else {
         optional_from_wire_expr(resolved_type, wire_value_expr)
     };
-    let Some(alternate_type) = &function.alternate_type else {
-        return expression;
-    };
-    let mut annotation = typescript_authored_type_annotation(alternate_type);
-    if !field.required {
-        annotation.push_str(" | undefined");
-    }
-    format!("({expression}) as {annotation}")
-}
-
-fn annotated_from_wire_expr(
-    field: &RecordFieldSpec<PlannedFamily>,
-    resolved_type: &ResolvedFieldType,
-    expression: String,
-) -> String {
-    let annotation = field
-        .annotation
-        .as_ref()
-        .and_then(|annotation| annotation.for_language(Language::TypeScript))
-        .map(str::to_string);
-    let Some(annotation) = annotation else {
-        return expression;
-    };
-    if annotation == resolved_type.annotation {
-        expression
-    } else {
-        format!("({expression}) as {annotation}")
-    }
+    expression
 }
 
 fn defaulted_enum_from_wire_expr(
