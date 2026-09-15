@@ -27,7 +27,7 @@ export interface StartWorkflowResult {
   runId?: string;
 }
 
-export function startWorkflowResultFromProto(
+function startWorkflowResultFromProto(
   proto:
     | temporal.api.workflowservice.v1.IStartWorkflowExecutionResponse
     | null
@@ -41,7 +41,7 @@ export function startWorkflowResultFromProto(
   };
 }
 
-export function startWorkflowResultToProto(
+function startWorkflowResultToProto(
   model: StartWorkflowResult | null | undefined,
 ): temporal.api.workflowservice.v1.IStartWorkflowExecutionResponse | undefined {
   if (model == null) {
@@ -73,7 +73,7 @@ export interface StartWorkflowRequest {
   namespace: string;
 }
 
-export function startWorkflowRequestFromProto(
+function startWorkflowRequestFromProto(
   proto:
     | temporal.api.workflowservice.v1.IStartWorkflowExecutionRequest
     | null
@@ -114,7 +114,7 @@ export function startWorkflowRequestFromProto(
   };
 }
 
-export function startWorkflowRequestToProto(
+function startWorkflowRequestToProto(
   model: StartWorkflowRequest | null | undefined,
 ): temporal.api.workflowservice.v1.IStartWorkflowExecutionRequest | undefined {
   if (model == null) {
@@ -151,7 +151,7 @@ export const startWorkflowRequestTransferTypeConverter = {
 };
 export type CancelWorkflowResponse = Record<string, never>;
 
-export function cancelWorkflowResponseFromProto(
+function cancelWorkflowResponseFromProto(
   proto:
     | temporal.api.workflowservice.v1.IRequestCancelWorkflowExecutionResponse
     | null
@@ -163,7 +163,7 @@ export function cancelWorkflowResponseFromProto(
   return {};
 }
 
-export function cancelWorkflowResponseToProto(
+function cancelWorkflowResponseToProto(
   model: CancelWorkflowResponse | null | undefined,
 ): temporal.api.workflowservice.v1.IRequestCancelWorkflowExecutionResponse | undefined {
   if (model == null) {
@@ -191,7 +191,7 @@ export interface CancelWorkflowRequest {
   namespace: string;
 }
 
-export function cancelWorkflowRequestFromProto(
+function cancelWorkflowRequestFromProto(
   proto:
     | temporal.api.workflowservice.v1.IRequestCancelWorkflowExecutionRequest
     | null
@@ -221,7 +221,7 @@ export function cancelWorkflowRequestFromProto(
   };
 }
 
-export function cancelWorkflowRequestToProto(
+function cancelWorkflowRequestToProto(
   model: CancelWorkflowRequest | null | undefined,
 ): temporal.api.workflowservice.v1.IRequestCancelWorkflowExecutionRequest | undefined {
   if (model == null) {
@@ -259,7 +259,7 @@ export interface WorkflowExecution {
   runId?: string;
 }
 
-export function workflowExecutionFromProto(
+function workflowExecutionFromProto(
   proto: temporal.api.common.v1.IWorkflowExecution | null | undefined,
 ): WorkflowExecution | undefined {
   if (proto == null) {
@@ -275,7 +275,7 @@ export function workflowExecutionFromProto(
   };
 }
 
-export function workflowExecutionToProto(
+function workflowExecutionToProto(
   model: WorkflowExecution | null | undefined,
 ): temporal.api.common.v1.IWorkflowExecution | undefined {
   if (model == null) {

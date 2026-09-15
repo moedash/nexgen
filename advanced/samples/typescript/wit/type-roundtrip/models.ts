@@ -33,7 +33,7 @@ export interface ActivityOptions {
   priority?: common.Priority;
 }
 
-export function activityOptionsFromProto(
+function activityOptionsFromProto(
   proto: temporal.api.activity.v1.IActivityOptions | null | undefined,
 ): ActivityOptions | undefined {
   if (proto == null) {
@@ -57,7 +57,7 @@ export function activityOptionsFromProto(
   };
 }
 
-export function activityOptionsToProto(
+function activityOptionsToProto(
   model: ActivityOptions | null | undefined,
 ): temporal.api.activity.v1.IActivityOptions | undefined {
   if (model == null) {
@@ -89,7 +89,7 @@ export interface FailureContainer {
   failure?: Error;
 }
 
-export function failureContainerFromProto(
+function failureContainerFromProto(
   proto:
     | temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes
     | null
@@ -103,7 +103,7 @@ export function failureContainerFromProto(
   };
 }
 
-export function failureContainerToProto(
+function failureContainerToProto(
   model: FailureContainer | null | undefined,
 ): temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes | undefined {
   if (model == null) {

@@ -406,7 +406,7 @@ fn render_model_to_proto_function(
 ) {
     let wire_annotation = rendered_model_wire_annotation(model, planned_record);
     if model.type_parameters.is_empty() {
-        output.push_str("export function ");
+        output.push_str("function ");
         output.push_str(function_name);
         output.push_str("(\n");
         output.push_str("  model: ");
@@ -415,7 +415,7 @@ fn render_model_to_proto_function(
     } else {
         render_named_generic_function_start(
             output,
-            &format!("export function {function_name}"),
+            &format!("function {function_name}"),
             &model.type_parameters,
             0,
         );
@@ -463,7 +463,7 @@ fn render_model_from_proto_function(
 ) {
     let wire_annotation = rendered_model_wire_annotation(model, planned_record);
     if model.type_parameters.is_empty() {
-        output.push_str("export function ");
+        output.push_str("function ");
         output.push_str(function_name);
         output.push_str("(\n");
         output.push_str("  proto: ");
@@ -472,7 +472,7 @@ fn render_model_from_proto_function(
     } else {
         render_named_generic_function_start(
             output,
-            &format!("export function {function_name}"),
+            &format!("function {function_name}"),
             &model.type_parameters,
             0,
         );

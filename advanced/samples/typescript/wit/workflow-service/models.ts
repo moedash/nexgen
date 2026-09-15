@@ -80,7 +80,7 @@ export interface SignalWithStartWorkflowResponse {
   started?: boolean;
 }
 
-export function signalWithStartWorkflowResponseFromProto(
+function signalWithStartWorkflowResponseFromProto(
   proto:
     | temporal.api.workflowservice.v1.ISignalWithStartWorkflowExecutionResponse
     | null
@@ -95,7 +95,7 @@ export function signalWithStartWorkflowResponseFromProto(
   };
 }
 
-export function signalWithStartWorkflowResponseToProto(
+function signalWithStartWorkflowResponseToProto(
   model: SignalWithStartWorkflowResponse | null | undefined,
 ):
   | temporal.api.workflowservice.v1.ISignalWithStartWorkflowExecutionResponse
@@ -304,7 +304,7 @@ export type SignalWithStartWorkflowRequest<
     )
 >;
 
-export function signalWithStartWorkflowRequestFromProto<
+function signalWithStartWorkflowRequestFromProto<
   WorkflowFn extends (...args: any[]) => Promise<any> = (
     ...args: any[]
   ) => Promise<any>,
@@ -421,7 +421,7 @@ export function signalWithStartWorkflowRequestFromProto<
   };
 }
 
-export function signalWithStartWorkflowRequestToProto<
+function signalWithStartWorkflowRequestToProto<
   WorkflowFn extends (...args: any[]) => Promise<any> = (
     ...args: any[]
   ) => Promise<any>,
@@ -536,7 +536,7 @@ export interface UserMetadata {
   staticDetails?: common.Payload;
 }
 
-export function userMetadataFromProto(
+function userMetadataFromProto(
   proto: temporal.api.sdk.v1.IUserMetadata | null | undefined,
 ): UserMetadata | undefined {
   if (proto == null) {
@@ -548,7 +548,7 @@ export function userMetadataFromProto(
   };
 }
 
-export function userMetadataToProto(
+function userMetadataToProto(
   model: UserMetadata | null | undefined,
 ): temporal.api.sdk.v1.IUserMetadata | undefined {
   if (model == null) {
