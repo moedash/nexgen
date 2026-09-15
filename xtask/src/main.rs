@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -34,6 +35,12 @@ struct ExampleArgs {
 
 #[derive(clap::Args)]
 struct ValidateArgs {
+    /// Print each validation command's output in addition to writing it to its log.
+    #[arg(short, long)]
+    verbose: bool,
+    /// Directory for per-language validation logs. Defaults to `target/validate-logs`.
+    #[arg(long, value_name = "DIR")]
+    log_dir: Option<PathBuf>,
     #[arg(value_enum, value_name = "LANGUAGE")]
     language: Option<ValidationLanguage>,
 }
@@ -85,6 +92,8 @@ fn main() -> ExitCode {
         }),
         Command::Validate(args) => validate(&ValidateRequest {
             language: args.language.map(Into::into),
+            verbose: args.verbose,
+            log_dir: args.log_dir,
         }),
     };
     match result {
