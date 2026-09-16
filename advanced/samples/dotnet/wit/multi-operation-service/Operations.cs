@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 using Google.Protobuf.WellKnownTypes;
 using Temporalio.Workflows;
 
-namespace Nexgen.InterceptorService
+namespace Temporalio.Workflows
 {
 
     [GeneratedCode("nexgen", null)]

@@ -232,6 +232,7 @@ fn dotnet_system_nexus_generation_emits_typed_outbound_interceptor() {
     ));
     assert!(models.contains("/// Static metadata for a workflow execution."));
     assert!(models.contains("/// Result of signaling a workflow and starting it if needed."));
+    assert!(models.contains("namespace Temporalio.Workflows"));
 
     let project_path = unique_output_path("dotnet-system-nexus-interceptor-build");
     fs::create_dir_all(&project_path).unwrap();
@@ -530,7 +531,7 @@ fn dotnet_renders_proto_backed_temporal_types() {
     let rendered = render_output_files(files);
 
     assert!(rendered.contains("internal interface IWorkflowService"));
-    assert!(rendered.contains("namespace Temporalio.Workflows\n{"));
+    assert!(rendered.contains("namespace Nexgen.WorkflowService\n{"));
     assert!(rendered.contains("namespace Nexgen.Support\n{"));
     assert!(!rendered.contains("namespace Temporalio.Workflows;"));
     assert!(!rendered.contains("namespace Nexgen.Support;"));

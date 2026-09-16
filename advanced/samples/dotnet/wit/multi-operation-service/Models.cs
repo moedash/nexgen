@@ -6,7 +6,7 @@ using System;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
 
-namespace Nexgen.InterceptorService
+namespace Temporalio.Workflows
 {
 
     [GeneratedCode("nexgen", null)]

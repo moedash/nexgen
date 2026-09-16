@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using NexusRpc;
 using Temporalio.Converters;
 
-namespace Nexgen.InterceptorService
+namespace Temporalio.Workflows
 {
 
     [GeneratedCode("nexgen", null)]

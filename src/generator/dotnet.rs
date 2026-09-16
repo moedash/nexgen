@@ -3916,6 +3916,9 @@ fn support_fragment_path(fragment: &SupportFragmentSpec) -> Result<PathBuf> {
 }
 
 fn dotnet_namespace(api_plan: &PlannedSpec) -> String {
+    if crate::nexgen_config::current().system_nexus {
+        return "Temporalio.Workflows".to_string();
+    }
     if !api_plan.module_path.is_root() {
         return dotnet_module_namespace(&api_plan.module_path);
     }

@@ -266,6 +266,16 @@ fn validate_dotnet(repo_root: &Path, log: &mut ValidationLog) -> Result<()> {
             "--nologo",
         ],
     )?;
+    run(
+        log,
+        &workflow_service_docs_root,
+        "dotnet",
+        &[
+            "build",
+            "Nexgen.DotNetMultiOperationService.csproj",
+            "--nologo",
+        ],
+    )?;
     Ok(())
 }
 
