@@ -658,18 +658,6 @@ fn python_output_path(root: &Path, example_id: &str) -> PathBuf {
         .join(example_id.to_snake_case())
 }
 
-fn python_json_definitions_output_path(root: &Path, example_id: &str) -> PathBuf {
-    // Definitions are the beginner-facing samples, flattened under samples/python/<snake>.
-    samples_python_root(root).join(example_id.to_snake_case())
-}
-
-fn python_json_api_output_path(root: &Path, example_id: &str) -> PathBuf {
-    python_root(root)
-        .join("json_schema")
-        .join("api")
-        .join(example_id.to_snake_case())
-}
-
 fn python_example_ids(root: &Path) -> Vec<String> {
     let mut ids = fs::read_dir(root.join("advanced/samples/inputs"))
         .unwrap()

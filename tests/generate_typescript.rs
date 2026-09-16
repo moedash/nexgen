@@ -526,19 +526,6 @@ fn samples_typescript_root(root: &Path) -> PathBuf {
     root.join("samples/typescript")
 }
 
-fn typescript_json_definitions_output_path(root: &Path, example_id: &str) -> PathBuf {
-    // Definitions are the beginner-facing samples, flattened directly under
-    // `samples/typescript/<example>`.
-    samples_typescript_root(root).join(example_id)
-}
-
-fn typescript_json_api_output_path(root: &Path, example_id: &str) -> PathBuf {
-    typescript_root(root)
-        .join("json_schema")
-        .join("api")
-        .join(example_id)
-}
-
 fn typescript_example_ids(root: &Path) -> Vec<String> {
     let mut ids = fs::read_dir(root.join("advanced/samples/inputs"))
         .unwrap()

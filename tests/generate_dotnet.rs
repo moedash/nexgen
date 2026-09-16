@@ -59,35 +59,6 @@ fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
     paths
 }
 
-fn dotnet_output_path(root: &Path, example_id: &str) -> PathBuf {
-    dotnet_root(root).join("wit").join(example_id)
-}
-
-fn dotnet_example_ids(root: &Path) -> Vec<String> {
-    let dotnet_root = dotnet_root(root);
-    let mut ids = fs::read_dir(root.join("advanced/samples/inputs"))
-        .unwrap()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            let example_id = if path.is_file() {
-                path.file_stem()?.to_string_lossy().into_owned()
-            } else if path.join("main.wit").is_file() {
-                path.file_name()?.to_string_lossy().into_owned()
-            } else {
-                return None;
-            };
-            if dotnet_root.join("wit").join(&example_id).is_dir() {
-                Some(example_id)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    ids.sort();
-    ids
-}
-
 fn read_dotnet_output_files(dir: &Path) -> BTreeMap<PathBuf, String> {
     fn visit(root: &Path, dir: &Path, files: &mut BTreeMap<PathBuf, String>) {
         let mut entries = fs::read_dir(dir)

@@ -1,3 +1,7 @@
+// Each integration-test crate imports this module independently, while the
+// helpers are shared across those crates.
+#![allow(dead_code)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -304,15 +304,13 @@ fn validate_generated_examples(
 
 fn run(log: &mut ValidationLog, cwd: &Path, program: &str, args: &[&str]) -> Result<()> {
     log.command(cwd, program, args)?;
-    let output = Command::new(program)
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .map_err(|source| Error::RunCommand {
-            cwd: cwd.to_path_buf(),
-            command: format_command(program, args),
-            source,
-        })?;
+    let mut command = Command::new(program);
+    command.current_dir(cwd).args(args);
+    let output = command.output().map_err(|source| Error::RunCommand {
+        cwd: cwd.to_path_buf(),
+        command: format_command(program, args),
+        source,
+    })?;
     log.output(&output.stdout, &output.stderr)?;
     if output.status.success() {
         Ok(())
