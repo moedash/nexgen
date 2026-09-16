@@ -1,0 +1,11 @@
+[workflow-service]
+system_nexus = true
+
+[multi-operation-service]
+system_nexus = true
+
+[proto-generic-python]
+languages = ["python"]
+
+[proto-oneof]
+languages = ["python"]
