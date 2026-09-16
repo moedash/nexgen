@@ -49,7 +49,7 @@ generated code, and tests.
 - [`user-service`](samples/inputs/user-service.wit): a small WIT-direct API showing the basic shape of an operation returning a resource and a resource method that calls another operation.
 - [`type-showcase`](samples/inputs/type-showcase.wit): a WIT-direct API focused on type coverage, including records, enums, flags, variants, results, maps, tuples, resources, resource methods, and no-result operations.
 - [`start-workflow`](samples/inputs/start-workflow.wit): a proto-backed Temporal workflow-start API that returns a generated resource handle with follow-up operations such as cancel, restart, and get-result.
-- [`workflow-service`](samples/inputs/system-nexus/workflow-service.wit): a proto-backed `SignalWithStartWorkflowExecution` example showing flattened APIs, function arguments, sourced fields, support converters, and output transforms.
+- [`workflow-service`](samples/inputs/workflow-service.wit): a proto-backed `SignalWithStartWorkflowExecution` example showing flattened APIs, function arguments, sourced fields, support converters, and output transforms.
 - [`type-roundtrip`](samples/inputs/type-roundtrip.wit): a proto-backed type roundtrip example for focused native/proto conversion coverage, including retry policies, activity options, durations, task queues, and priority.
 
 Rebuild the checked-in example outputs:
@@ -259,7 +259,7 @@ Generate a proto-backed example:
 
 ```bash
 cargo run --features advanced -- python \
-  advanced/samples/inputs/system-nexus/workflow-service.wit \
+  advanced/samples/inputs/workflow-service.wit \
   advanced/samples/inputs/deps \
   --descriptors advanced/samples/descriptors/temporal_api.bin \
   --native-api \
@@ -348,7 +348,7 @@ Extend an existing WIT file with a new RPC:
 cargo run --features advanced -- add-rpc \
   --descriptors advanced/samples/descriptors/temporal_api.bin \
   --rpc SignalWorkflowExecution \
-  --input advanced/samples/inputs/system-nexus/workflow-service.wit \
+  --input advanced/samples/inputs/workflow-service.wit \
   --input advanced/samples/inputs/deps
 ```
 
@@ -358,9 +358,9 @@ Rewrite the existing WIT file in place by pointing `--output` at the same path:
 cargo run --features advanced -- add-rpc \
   --descriptors advanced/samples/descriptors/temporal_api.bin \
   --rpc SignalWorkflowExecution \
-  --input advanced/samples/inputs/system-nexus/workflow-service.wit \
+  --input advanced/samples/inputs/workflow-service.wit \
   --input advanced/samples/inputs/deps \
-  --output advanced/samples/inputs/system-nexus/workflow-service.wit
+  --output advanced/samples/inputs/workflow-service.wit
 ```
 
 ## Validation

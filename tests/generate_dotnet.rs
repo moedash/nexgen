@@ -59,35 +59,6 @@ fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
     paths
 }
 
-fn dotnet_output_path(root: &Path, example_id: &str) -> PathBuf {
-    dotnet_root(root).join("wit").join(example_id)
-}
-
-fn dotnet_example_ids(root: &Path) -> Vec<String> {
-    let dotnet_root = dotnet_root(root);
-    let mut ids = fs::read_dir(root.join("advanced/samples/inputs"))
-        .unwrap()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            let example_id = if path.is_file() {
-                path.file_stem()?.to_string_lossy().into_owned()
-            } else if path.join("main.wit").is_file() {
-                path.file_name()?.to_string_lossy().into_owned()
-            } else {
-                return None;
-            };
-            if dotnet_root.join("wit").join(&example_id).is_dir() {
-                Some(example_id)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    ids.sort();
-    ids
-}
-
 fn read_dotnet_output_files(dir: &Path) -> BTreeMap<PathBuf, String> {
     fn visit(root: &Path, dir: &Path, files: &mut BTreeMap<PathBuf, String>) {
         let mut entries = fs::read_dir(dir)
@@ -232,6 +203,7 @@ fn dotnet_system_nexus_generation_emits_typed_outbound_interceptor() {
     ));
     assert!(models.contains("/// Static metadata for a workflow execution."));
     assert!(models.contains("/// Result of signaling a workflow and starting it if needed."));
+    assert!(models.contains("namespace Temporalio.Workflows"));
 
     let project_path = unique_output_path("dotnet-system-nexus-interceptor-build");
     fs::create_dir_all(&project_path).unwrap();
@@ -530,7 +502,7 @@ fn dotnet_renders_proto_backed_temporal_types() {
     let rendered = render_output_files(files);
 
     assert!(rendered.contains("internal interface IWorkflowService"));
-    assert!(rendered.contains("namespace Temporalio.Workflows\n{"));
+    assert!(rendered.contains("namespace Nexgen.WorkflowService\n{"));
     assert!(rendered.contains("namespace Nexgen.Support\n{"));
     assert!(!rendered.contains("namespace Temporalio.Workflows;"));
     assert!(!rendered.contains("namespace Nexgen.Support;"));

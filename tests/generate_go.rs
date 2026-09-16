@@ -264,45 +264,12 @@ fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
     paths
 }
 
-fn go_root(root: &Path) -> PathBuf {
-    root.join("advanced/samples/go")
-}
-
 fn go_package_name(example_id: &str) -> String {
     example_id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect::<String>()
         .to_lowercase()
-}
-
-fn go_output_path(root: &Path, example_id: &str) -> PathBuf {
-    go_root(root).join(go_package_name(example_id))
-}
-
-fn go_example_ids(root: &Path) -> Vec<String> {
-    let go_root = go_root(root);
-    let mut ids = fs::read_dir(root.join("advanced/samples/inputs"))
-        .unwrap()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            let example_id = if path.is_file() {
-                path.file_stem()?.to_string_lossy().into_owned()
-            } else if path.join("main.wit").is_file() {
-                path.file_name()?.to_string_lossy().into_owned()
-            } else {
-                return None;
-            };
-            if go_root.join(go_package_name(&example_id)).is_dir() {
-                Some(example_id)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    ids.sort();
-    ids
 }
 
 fn read_go_output_files(dir: &Path) -> BTreeMap<PathBuf, String> {
@@ -334,28 +301,6 @@ fn read_go_output_files(dir: &Path) -> BTreeMap<PathBuf, String> {
     let mut files = BTreeMap::new();
     visit(dir, dir, &mut files);
     files
-}
-
-fn generate_formatted_go_output(root: &Path, example_id: &str, output_path: &Path) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_nexgen"));
-    command
-        .arg("go")
-        .args(example_input_paths(root, example_id))
-        .args([
-            "--descriptors",
-            descriptor_path(root).to_str().unwrap(),
-            "--output",
-            output_path.to_str().unwrap(),
-            "--native-api",
-        ]);
-    let status = command.status().unwrap();
-    assert!(status.success());
-
-    let format_status = Command::new("gofmt")
-        .args(["-w", output_path.to_str().unwrap()])
-        .status()
-        .unwrap();
-    assert!(format_status.success());
 }
 
 fn unique_output_path(label: &str) -> PathBuf {
@@ -1960,18 +1905,6 @@ interface support {
     assert_eq!(second_source, "generated Go support file");
     assert!(remedy.contains("rename service `Support`"), "{remedy}");
     fs::remove_dir_all(temp_dir).unwrap();
-}
-
-fn go_json_output_path(root: &Path, mode: &str, example_id: &str) -> PathBuf {
-    // Definitions are the beginner-facing samples (samples/go/<pkg>); native-api
-    // output is snapshot-only under the advanced project.
-    match mode {
-        "definitions" => root.join("samples/go").join(go_package_name(example_id)),
-        _ => go_root(root)
-            .join("json_schema")
-            .join(mode)
-            .join(go_package_name(example_id)),
-    }
 }
 
 fn generate_formatted_go_json_output(

@@ -64,11 +64,6 @@ pub enum Error {
     #[error("output path `{path}`'s final component is not valid UTF-8")]
     OutputPathNotUtf8 { path: PathBuf },
 
-    #[error(
-        "refusing to delete example output path `{path}`: it is not a directory inside `{root}`"
-    )]
-    ExampleOutputPathOutsideRoot { path: PathBuf, root: PathBuf },
-
     #[error("failed to run formatter `{command}` for `{path}`: {source}")]
     RunFormatter {
         path: PathBuf,
@@ -80,21 +75,6 @@ pub enum Error {
     #[error("formatter `{command}` failed for `{path}` with status {status}")]
     FormatterFailed {
         path: PathBuf,
-        command: String,
-        status: ExitStatus,
-    },
-
-    #[error("failed to run command `{command}` in `{cwd}`: {source}")]
-    RunCommand {
-        cwd: PathBuf,
-        command: String,
-        #[source]
-        source: io::Error,
-    },
-
-    #[error("command `{command}` failed in `{cwd}` with status {status}")]
-    CommandFailed {
-        cwd: PathBuf,
         command: String,
         status: ExitStatus,
     },
@@ -192,12 +172,6 @@ pub enum Error {
 
     #[error("message name `{name}` is ambiguous; matches: {matches:?}")]
     AmbiguousMessageName { name: String, matches: Vec<String> },
-
-    #[error("unknown {language} example `{example_id}`")]
-    UnknownExampleId {
-        language: Language,
-        example_id: String,
-    },
 
     #[error("cannot generate add-rpc WIT for `{context}`: {reason}")]
     UnsupportedAddRpc { context: String, reason: String },
