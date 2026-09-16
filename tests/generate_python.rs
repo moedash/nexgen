@@ -16,7 +16,7 @@ use nexgen::spec::SupportFragmentSpec;
 use nexgen::{GenerateRequest, generate_to_file};
 
 mod common;
-use common::{json_input_path, write_bare_ref_alias_closure};
+use common::{json_input_path, wit_input_path, write_bare_ref_alias_closure};
 
 const PRIMARY_EXAMPLE_ID: &str = "workflow-service";
 const TYPE_ROUNDTRIP_EXAMPLE_ID: &str = "type-roundtrip";
@@ -633,7 +633,7 @@ fn linked_inputs_path(root: &Path) -> PathBuf {
 }
 
 fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
-    let input = input_path(root, example_id);
+    let input = wit_input_path(root, example_id);
     let mut paths = vec![input.clone()];
     if fs::read_to_string(&input)
         .unwrap()
@@ -650,18 +650,6 @@ fn python_root(root: &Path) -> PathBuf {
 
 fn samples_python_root(root: &Path) -> PathBuf {
     root.join("samples/python")
-}
-
-fn input_path(root: &Path, example_id: &str) -> PathBuf {
-    let input_root = root.join("advanced/samples/inputs");
-    let flat_path = input_root.join(format!("{example_id}.wit"));
-    if flat_path.is_file() {
-        flat_path
-    } else {
-        input_root
-            .join("system-nexus")
-            .join(format!("{example_id}.wit"))
-    }
 }
 
 fn python_output_path(root: &Path, example_id: &str) -> PathBuf {
@@ -1101,7 +1089,7 @@ fn cli_generates_wit_direct_example_without_descriptors() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "python",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--output",
             output_path.to_str().unwrap(),
         ])
@@ -1187,7 +1175,7 @@ fn cli_generates_python_support_file_from_parameter() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "python",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--support-file",
             support_path.to_str().unwrap(),
             "--output",
@@ -1532,7 +1520,7 @@ fn python_rejects_proto_variant_case_class_name_collisions() {
     let temp_dir = unique_output_path("python-proto-variant-case-collision");
     fs::create_dir_all(&temp_dir).unwrap();
     let collision_path = temp_dir.join("collision.wit");
-    let fixture = fs::read_to_string(input_path(&root, "proto-oneof")).unwrap();
+    let fixture = fs::read_to_string(wit_input_path(&root, "proto-oneof")).unwrap();
     let fixture = fixture.strip_suffix("}\n").unwrap();
     fs::write(
         &collision_path,
