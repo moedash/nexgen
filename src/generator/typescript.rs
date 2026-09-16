@@ -6614,7 +6614,7 @@ mod tests {
     }
 
     fn sample_input_path(root: &std::path::Path) -> PathBuf {
-        root.join("advanced/samples/inputs/system-nexus/workflow-service.wit")
+        root.join("advanced/samples/inputs/workflow-service.wit")
     }
 
     fn type_roundtrip_input_path(root: &std::path::Path) -> PathBuf {

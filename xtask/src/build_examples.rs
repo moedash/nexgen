@@ -3,11 +3,35 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use heck::ToSnakeCase;
-use nexgen::error::{Error, Result};
+use nexgen::error::Error as NexgenError;
 use nexgen::generator::{GenerationMode, TsDateTimeTypes};
 use nexgen::language::Language;
 use nexgen::nexgen_config::NexgenConfig;
 use nexgen::{GenerateRequest, generate_to_file};
+use serde::Deserialize;
+
+use crate::error::{Error, Result};
+
+#[derive(Default, Deserialize)]
+struct ExamplesConfig {
+    #[serde(flatten)]
+    examples: std::collections::BTreeMap<String, ExampleConfig>,
+}
+
+#[derive(Default, Deserialize)]
+struct ExampleConfig {
+    languages: Option<Vec<String>>,
+    #[serde(default)]
+    system_nexus: bool,
+}
+
+impl ExampleConfig {
+    fn supports(&self, language: Language) -> bool {
+        self.languages
+            .as_ref()
+            .is_none_or(|languages| languages.iter().any(|name| name == language.as_str()))
+    }
+}
 
 #[derive(Clone)]
 pub struct BuildExamplesRequest {
@@ -198,7 +222,7 @@ pub fn build_json_examples(request: &BuildExamplesRequest) -> Result<()> {
             language,
             Language::Python | Language::TypeScript | Language::Go | Language::Java
         ) {
-            return Err(Error::UnsupportedLanguage { language });
+            return Err(NexgenError::UnsupportedLanguage { language }.into());
         }
         if language == Language::TypeScript {
             ensure_typescript_dependencies(&samples_language_root(&repo_root, language))?;
@@ -218,14 +242,17 @@ pub fn build_json_examples(request: &BuildExamplesRequest) -> Result<()> {
 
 fn discover_example_ids(repo_root: &Path, language: Language) -> Result<Vec<String>> {
     let input_root = repo_root.join("advanced/samples/inputs");
+    let config = load_examples_config(&input_root)?;
     let mut input_paths = Vec::new();
     discover_example_input_paths(&input_root, &mut input_paths)?;
     let mut ids = input_paths
         .into_iter()
         .filter_map(|path| {
             let id = example_id_for_input(&path)?;
-            example_output_path(repo_root, language, &id)
-                .is_dir()
+            config
+                .examples
+                .get(&id)
+                .is_none_or(|example| example.supports(language))
                 .then_some(id)
         })
         .collect::<Vec<_>>();
@@ -233,13 +260,25 @@ fn discover_example_ids(repo_root: &Path, language: Language) -> Result<Vec<Stri
     Ok(ids)
 }
 
+fn load_examples_config(input_root: &Path) -> Result<ExamplesConfig> {
+    let path = input_root.join("examples.toml");
+    let contents = fs::read_to_string(&path).map_err(|source| NexgenError::ReadFile {
+        path: path.clone(),
+        source,
+    })?;
+    toml::from_str(&contents).map_err(|source| Error::InvalidExampleConfig {
+        path,
+        reason: source.to_string(),
+    })
+}
+
 fn discover_example_input_paths(path: &Path, inputs: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(path).map_err(|source| Error::ReadFile {
+    for entry in fs::read_dir(path).map_err(|source| NexgenError::ReadFile {
         path: path.to_path_buf(),
         source,
     })? {
         let path = entry
-            .map_err(|source| Error::ReadFile {
+            .map_err(|source| NexgenError::ReadFile {
                 path: path.to_path_buf(),
                 source,
             })?
@@ -297,7 +336,7 @@ fn filter_available_example_ids(
 fn discover_json_example_ids(repo_root: &Path) -> Result<Vec<String>> {
     let root = repo_root.join("samples/schemas");
     let mut ids = fs::read_dir(&root)
-        .map_err(|source| Error::ReadFile { path: root, source })?
+        .map_err(|source| NexgenError::ReadFile { path: root, source })?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             if path.is_dir() {
@@ -387,15 +426,17 @@ fn reset_example_output_directory(language_root: &Path, output_path: &Path) -> R
     match fs::remove_dir_all(output_path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(Error::WriteFile {
+        Err(source) => Err(NexgenError::WriteFile {
             path: output_path.to_path_buf(),
             source,
-        }),
+        }
+        .into()),
     }
 }
 
 fn build_example(repo_root: &Path, language: Language, example_id: &str) -> Result<()> {
     let input_path = example_input_path(repo_root, example_id);
+    let config = load_examples_config(&repo_root.join("advanced/samples/inputs"))?;
     let mut input_paths = vec![input_path.clone()];
     input_paths.extend(example_linked_input_paths(repo_root, &input_path)?);
     let output_path = example_output_path(repo_root, language, example_id);
@@ -404,13 +445,10 @@ fn build_example(repo_root: &Path, language: Language, example_id: &str) -> Resu
     let generate_request = GenerateRequest {
         config: NexgenConfig {
             mode: GenerationMode::NativeApi,
-            system_nexus: input_path
-                .strip_prefix(repo_root.join("advanced/samples/inputs"))
-                .is_ok_and(|relative| {
-                    relative
-                        .components()
-                        .any(|component| component.as_os_str() == "system-nexus")
-                }),
+            system_nexus: config
+                .examples
+                .get(example_id)
+                .is_some_and(|example| example.system_nexus),
         },
         language,
         input_paths,
@@ -528,7 +566,7 @@ fn json_example_input_path(root: &Path, id: &str) -> PathBuf {
     input_root.join(format!("{id}.yaml"))
 }
 fn example_linked_input_paths(root: &Path, input_path: &Path) -> Result<Vec<PathBuf>> {
-    let input = fs::read_to_string(input_path).map_err(|source| Error::ReadFile {
+    let input = fs::read_to_string(input_path).map_err(|source| NexgenError::ReadFile {
         path: input_path.to_path_buf(),
         source,
     })?;
@@ -626,7 +664,7 @@ fn format_example_output(
                 output_path.to_string_lossy().into_owned(),
             ],
         ),
-        language => return Err(Error::UnsupportedLanguage { language }),
+        language => return Err(NexgenError::UnsupportedLanguage { language }.into()),
     };
     let command = format_command(program, &args);
     let status = ProcessCommand::new(program)
@@ -657,16 +695,16 @@ fn format_command(program: &str, args: &[String]) -> String {
 /// Replaces the release-specific version in generated example headers so a
 /// release bump does not create unrelated diffs across checked-in examples.
 fn normalize_example_headers(output_path: &Path) -> Result<()> {
-    for entry in fs::read_dir(output_path).map_err(|source| Error::ReadFile {
+    for entry in fs::read_dir(output_path).map_err(|source| NexgenError::ReadFile {
         path: output_path.to_path_buf(),
         source,
     })? {
-        let entry = entry.map_err(|source| Error::ReadFile {
+        let entry = entry.map_err(|source| NexgenError::ReadFile {
             path: output_path.to_path_buf(),
             source,
         })?;
         let path = entry.path();
-        let file_type = entry.file_type().map_err(|source| Error::ReadFile {
+        let file_type = entry.file_type().map_err(|source| NexgenError::ReadFile {
             path: path.clone(),
             source,
         })?;
@@ -680,7 +718,7 @@ fn normalize_example_headers(output_path: &Path) -> Result<()> {
 }
 
 fn normalize_example_header(path: &Path) -> Result<()> {
-    let contents = fs::read_to_string(path).map_err(|source| Error::ReadFile {
+    let contents = fs::read_to_string(path).map_err(|source| NexgenError::ReadFile {
         path: path.to_path_buf(),
         source,
     })?;
@@ -694,10 +732,11 @@ fn normalize_example_header(path: &Path) -> Result<()> {
     let version_end = version_number_start + version_end;
     let mut normalized = contents;
     normalized.replace_range(version_start..version_end, "nexgen latest");
-    fs::write(path, normalized).map_err(|source| Error::WriteFile {
+    fs::write(path, normalized).map_err(|source| NexgenError::WriteFile {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]

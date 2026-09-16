@@ -14,7 +14,7 @@ mod format_tests {
     }
 
     fn sample_input_path(root: &Path) -> PathBuf {
-        root.join("advanced/samples/inputs/system-nexus/workflow-service.wit")
+        root.join("advanced/samples/inputs/workflow-service.wit")
     }
 
     fn descriptor_path(root: &Path) -> PathBuf {

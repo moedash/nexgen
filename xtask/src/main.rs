@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use nexgen::language::Language;
 
 mod build_examples;
+mod error;
 mod validate;
 use build_examples::{BuildExamplesRequest, ExampleFormat, build_examples};
 use validate::{ValidateRequest, validate};

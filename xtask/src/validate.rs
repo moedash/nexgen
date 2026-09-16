@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use nexgen::error::{Error, Result};
+use nexgen::error::Error as NexgenError;
+
+use crate::error::{Error, Result};
 
 #[derive(Clone, Copy)]
 pub enum ValidationLanguage {
@@ -28,7 +30,7 @@ pub fn validate(request: &ValidateRequest) -> Result<()> {
         .log_dir
         .clone()
         .unwrap_or_else(|| repo_root.join("target/validate-logs"));
-    fs::create_dir_all(&log_dir).map_err(|source| Error::WriteFile {
+    fs::create_dir_all(&log_dir).map_err(|source| NexgenError::WriteFile {
         path: log_dir.clone(),
         source,
     })?;
@@ -109,12 +111,12 @@ struct ValidationLog {
 impl ValidationLog {
     fn new(log_dir: &Path, language: ValidationLanguage, verbose: bool) -> Result<Self> {
         let path = log_dir.join(format!("{}.log", language.log_name()));
-        let mut file = File::create(&path).map_err(|source| Error::WriteFile {
+        let mut file = File::create(&path).map_err(|source| NexgenError::WriteFile {
             path: path.clone(),
             source,
         })?;
         writeln!(file, "# nexgen validation: {}", language.name()).map_err(|source| {
-            Error::WriteFile {
+            NexgenError::WriteFile {
                 path: path.clone(),
                 source,
             }
@@ -139,11 +141,11 @@ impl ValidationLog {
     fn write(&mut self, output: &[u8]) -> Result<()> {
         self.file
             .write_all(output)
-            .map_err(|source| Error::WriteFile {
+            .map_err(|source| NexgenError::WriteFile {
                 path: self.path.clone(),
                 source,
             })?;
-        self.file.flush().map_err(|source| Error::WriteFile {
+        self.file.flush().map_err(|source| NexgenError::WriteFile {
             path: self.path.clone(),
             source,
         })?;

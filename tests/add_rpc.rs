@@ -10,7 +10,7 @@ use nexgen::add_rpc_to_string;
 use nexgen::language::Language;
 use nexgen::spec::{ApiSpec, TypeSpec};
 
-const PRIMARY_EXAMPLE_PATH: &str = "advanced/samples/inputs/system-nexus/workflow-service.wit";
+const PRIMARY_EXAMPLE_PATH: &str = "advanced/samples/inputs/workflow-service.wit";
 
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,8 +49,7 @@ fn write_temp_wit(name: &str, contents: &str) -> PathBuf {
         let dotnet_dir = temp_dir.join("dotnet");
         fs::create_dir_all(&dotnet_dir).unwrap();
         fs::copy(
-            project_root()
-                .join("advanced/samples/inputs/system-nexus/dotnet/WorkflowServiceSupport.cs"),
+            project_root().join("advanced/samples/inputs/dotnet/WorkflowServiceSupport.cs"),
             dotnet_dir.join("WorkflowServiceSupport.cs"),
         )
         .unwrap();
