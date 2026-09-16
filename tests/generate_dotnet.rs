@@ -13,6 +13,9 @@ use nexgen::generator::generate_source;
 use nexgen::spec::SupportFragmentSpec;
 use nexgen::{GenerateRequest, SupportFiles, generate_to_file};
 
+mod common;
+use common::wit_input_path;
+
 const WORKFLOW_SERVICE_EXAMPLE_ID: &str = "workflow-service";
 const TYPE_SHOWCASE_EXAMPLE_ID: &str = "type-showcase";
 static DOTNET_COMMAND_LOCK: Mutex<()> = Mutex::new(());
@@ -44,21 +47,8 @@ fn dotnet_command() -> (MutexGuard<'static, ()>, Command) {
     (guard, command)
 }
 
-fn input_path(root: &Path, example_id: &str) -> PathBuf {
-    let flat_path = root
-        .join("advanced/samples/inputs")
-        .join(format!("{example_id}.wit"));
-    if flat_path.is_file() {
-        flat_path
-    } else {
-        root.join("advanced/samples/inputs")
-            .join(example_id)
-            .join("main.wit")
-    }
-}
-
 fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
-    let input = input_path(root, example_id);
+    let input = wit_input_path(root, example_id);
     let mut paths = vec![input.clone()];
     if fs::read_to_string(&input)
         .unwrap()
@@ -359,7 +349,7 @@ fn cli_generates_dotnet_support_file_from_parameter() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "dotnet",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--support-file",
             support_path.to_str().unwrap(),
             "--output",

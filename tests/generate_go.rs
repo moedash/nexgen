@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nexgen::{GenerateRequest, generate_to_file};
 
 mod common;
-use common::{json_input_path, write_bare_ref_alias_closure};
+use common::{json_input_path, wit_input_path, write_bare_ref_alias_closure};
 
 static OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -253,7 +253,7 @@ fn linked_inputs_path(root: &Path) -> PathBuf {
 }
 
 fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
-    let input = input_path(root, example_id);
+    let input = wit_input_path(root, example_id);
     let mut paths = vec![input.clone()];
     if fs::read_to_string(&input)
         .unwrap()
@@ -266,19 +266,6 @@ fn example_input_paths(root: &Path, example_id: &str) -> Vec<PathBuf> {
 
 fn go_root(root: &Path) -> PathBuf {
     root.join("advanced/samples/go")
-}
-
-fn input_path(root: &Path, example_id: &str) -> PathBuf {
-    let flat_path = root
-        .join("advanced/samples/inputs")
-        .join(format!("{example_id}.wit"));
-    if flat_path.is_file() {
-        flat_path
-    } else {
-        root.join("advanced/samples/inputs")
-            .join(example_id)
-            .join("main.wit")
-    }
 }
 
 fn go_package_name(example_id: &str) -> String {
@@ -403,7 +390,7 @@ fn cli_generates_go_support_file_from_parameter() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "go",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--support-file",
             support_path.to_str().unwrap(),
             "--output",
@@ -441,7 +428,7 @@ fn cli_generates_go_with_package_self_imports_removed() {
     let output_path = temp_dir.join("workflow");
     fs::create_dir_all(&temp_dir).unwrap();
     let temp_input_path = temp_dir.join("user-service.wit");
-    let input = fs::read_to_string(input_path(&root, "user-service"))
+    let input = fs::read_to_string(wit_input_path(&root, "user-service"))
         .unwrap()
         .replace(
             "interface user-service {",
@@ -485,7 +472,7 @@ fn cli_rejects_go_output_directory_mismatched_with_namespace() {
     let output_path = temp_dir.join("output");
     fs::create_dir_all(&temp_dir).unwrap();
     let temp_input_path = temp_dir.join("user-service.wit");
-    let input = fs::read_to_string(input_path(&root, "user-service"))
+    let input = fs::read_to_string(wit_input_path(&root, "user-service"))
         .unwrap()
         .replace(
             "interface user-service {",
@@ -521,7 +508,7 @@ fn cli_rejects_output_at_filesystem_root() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "go",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--output",
             "/",
         ])
@@ -553,7 +540,7 @@ fn cli_preserves_existing_output_directory_contents() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "go",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--output",
             output_path.to_str().unwrap(),
         ])
@@ -598,7 +585,7 @@ fn cli_overwrites_previously_generated_files_in_place() {
     let output = Command::new(env!("CARGO_BIN_EXE_nexgen"))
         .args([
             "go",
-            input_path(&root, "user-service").to_str().unwrap(),
+            wit_input_path(&root, "user-service").to_str().unwrap(),
             "--output",
             output_path.to_str().unwrap(),
         ])
@@ -1115,7 +1102,7 @@ fn go_function_fields_accept_strings_or_exact_function_pointers() {
 
     let user_rendered = generate_to_string_with_inputs(
         nexgen::language::Language::Go,
-        &[input_path(&root, "user-service")],
+        &[wit_input_path(&root, "user-service")],
         &[],
     )
     .unwrap();

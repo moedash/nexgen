@@ -62,7 +62,7 @@ export function retryPolicyToProto(
 
 export function workflowTypeFromProto(
   proto: temporal.api.common.v1.IWorkflowType,
-): string | common.Workflow {
+): string {
   return proto.name ?? "";
 }
 
@@ -82,6 +82,19 @@ export function signalFunctionName(
   return typeof value === "string" ? value : value.name;
 }
 
+export function functionInputTypes(
+  value: unknown,
+): readonly common.TypeInfo[] | undefined {
+  if (typeof value === "function") {
+    return common.extractWorkflowTypeAndConfig(value as common.Workflow).typeInfo
+      ?.inputTypes;
+  }
+  if (typeof value === "object" && value !== null) {
+    return (value as common.SignalDefinition<any[]>).typeInfo?.inputTypes;
+  }
+  return undefined;
+}
+
 export function taskQueueFromProto(
   proto: temporal.api.taskqueue.v1.ITaskQueue,
 ): string {
@@ -96,6 +109,21 @@ export function taskQueueToProto(
 
 export function workflowNamespace(): string {
   return workflow.workflowInfo().namespace;
+}
+
+/** Serialization context for payloads owned by a signal-with-start target workflow. */
+export function signalWithStartWorkflowSerializationContext(request: {
+  namespace?: string | null;
+  workflowId?: string | null;
+}): common.WorkflowSerializationContext {
+  if (request.namespace == null || request.workflowId == null) {
+    throw new TypeError("signal-with-start request is missing namespace or workflowId");
+  }
+  return {
+    type: "workflow",
+    namespace: request.namespace,
+    workflowId: request.workflowId,
+  };
 }
 
 export function payloadFromProto(
@@ -124,6 +152,39 @@ function configuredPayloadConverter(): common.PayloadConverter {
     );
   }
   return activator.payloadConverter;
+}
+
+/** Convert application values to the protobuf payload-list representation. */
+export function payloadsToProto(
+  values: ReadonlyArray<unknown>,
+  typeInfo?: readonly common.TypeInfo[],
+): temporal.api.common.v1.IPayloads {
+  return {
+    payloads:
+      common.toPayloadsWithContext(
+        configuredPayloadConverter(),
+        undefined,
+        Array.from(values),
+        typeInfo,
+      ) ?? [],
+  };
+}
+
+/** Convert a protobuf payload-list representation to application values. */
+export function payloadsFromProto(
+  proto: temporal.api.common.v1.IPayloads,
+): unknown[] {
+  return common.arrayFromPayloads(configuredPayloadConverter(), proto.payloads) ?? [];
+}
+
+/** Convert one application value to a protobuf payload. */
+export function valueToPayload(value: unknown): common.Payload {
+  return configuredPayloadConverter().toPayload(value);
+}
+
+/** Convert one protobuf payload to an application value. */
+export function payloadToValue<T>(payload: common.Payload): T {
+  return configuredPayloadConverter().fromPayload<T>(payload);
 }
 
 export function failureFromProto(

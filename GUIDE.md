@@ -820,8 +820,10 @@ operation result into a different type before returning it.
 /// @nexus.output-transform
 ///   python-type="workflow.ExternalWorkflowHandle[typing.Any]"
 ///   python="workflow.get_external_workflow_handle(request.id, run_id=result.run_id)"
-///   typescript-type="workflow.ExternalWorkflowHandle"
+///   typescript-type="ExternalWorkflowHandle"
+///   typescript-type-import="../../../../workflow"
 ///   typescript="workflow.getExternalWorkflowHandle(request.id, result.runId ?? undefined)"
+///   typescript-import="@temporalio/workflow"
 ///   go-type="example.com/handles:handles.WorkflowHandle"
 ///   go="handles.FromSignalWithStart(request, &result)"
 signal-with-start-workflow: func(
@@ -833,6 +835,11 @@ The generated wrapper returns the transformed type. The transform expression
 has access to `request` (the input) and `result` (the raw response). Go
 transform expressions must evaluate to `(T, error)`, where `T` is the
 `go-type` value:
+
+For TypeScript, `typescript-type-import` adds a type-only import for the type
+named by `typescript-type`; `typescript-import` adds the value import used by
+the transform expression. They are separate because a transform can need a
+type from one module and a runtime value from another.
 
 ```python
 result = await handle
@@ -1557,7 +1564,8 @@ The referenced helper must be provided through `@nexus.support`.
 ```
 @nexus.output-transform
   python-type="<type>" python="<expr>"
-  typescript-type="<type>" typescript="<expr>"
+  typescript-type="<type>" typescript-type-import="<type-module>"
+  typescript="<expr>" typescript-import="<value-module>"
   go-type="<type>" go="<expr-returning-T-error>"
 ```
 
@@ -1569,13 +1577,17 @@ has access to `request` and `result` variables. Go expressions must return
 /// @nexus.output-transform
 ///   python-type="workflow.ExternalWorkflowHandle[typing.Any]"
 ///   python="workflow.get_external_workflow_handle(request.id, run_id=result.run_id)"
-///   typescript-type="workflow.ExternalWorkflowHandle"
+///   typescript-type="ExternalWorkflowHandle"
+///   typescript-type-import="../../../../workflow"
 ///   typescript="workflow.getExternalWorkflowHandle(request.id, result.runId ?? undefined)"
+///   typescript-import="@temporalio/workflow"
 ///   go-type="example.com/handles:handles.WorkflowHandle"
 ///   go="handles.FromSignalWithStart(request, &result)"
 ```
 
 Both the type and expression must be provided together for each language.
+The TypeScript import fields are optional, but required when the generated
+return type or transform expression refers to an otherwise-unavailable module.
 
 ---
 

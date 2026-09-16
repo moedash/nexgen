@@ -68,6 +68,7 @@ pub fn validate(request: &ValidateRequest) -> Result<()> {
                     started.elapsed(),
                     log.path.display()
                 );
+                log.print_on_failure();
                 return Err(error);
             }
         }
@@ -157,6 +158,23 @@ impl ValidationLog {
             io::stderr().write_all(stderr).ok();
         }
         Ok(())
+    }
+
+    fn print_on_failure(&mut self) {
+        if let Err(error) = self.file.flush() {
+            eprintln!(
+                "failed to flush validation log {}: {error}",
+                self.path.display()
+            );
+            return;
+        }
+        match fs::read_to_string(&self.path) {
+            Ok(contents) => eprintln!("\n==> Validation log ({})\n{contents}", self.path.display()),
+            Err(error) => eprintln!(
+                "failed to read validation log {}: {error}",
+                self.path.display()
+            ),
+        }
     }
 }
 

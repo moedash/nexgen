@@ -22,6 +22,32 @@ pub fn json_input_path(root: &Path, example_id: &str) -> PathBuf {
     input_root.join(format!("{example_id}.yaml"))
 }
 
+/// Resolves a WIT example by file stem anywhere below `advanced/samples/inputs`.
+/// Dependency inputs are intentionally excluded from the example fixture tree.
+pub fn wit_input_path(root: &Path, example_id: &str) -> PathBuf {
+    fn collect_wit_inputs(path: &Path, inputs: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "deps") {
+                    continue;
+                }
+                collect_wit_inputs(&path, inputs);
+            } else if path.extension().is_some_and(|extension| extension == "wit") {
+                inputs.push(path);
+            }
+        }
+    }
+
+    let input_root = root.join("advanced/samples/inputs");
+    let mut inputs = Vec::new();
+    collect_wit_inputs(&input_root, &mut inputs);
+    inputs
+        .into_iter()
+        .find(|path| path.file_stem().is_some_and(|stem| stem == example_id))
+        .expect("requested WIT example must exist")
+}
+
 /// Writes a three-file closure exercising a bare-ref file-root alias from both
 /// an ordinary property and Nexus operation I/O.
 pub fn write_bare_ref_alias_closure(root: &Path) -> PathBuf {

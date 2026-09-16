@@ -33,7 +33,7 @@ export interface ActivityOptions {
   priority?: common.Priority;
 }
 
-export function activityOptionsFromProto(
+function activityOptionsFromProto(
   proto: temporal.api.activity.v1.IActivityOptions | null | undefined,
 ): ActivityOptions | undefined {
   if (proto == null) {
@@ -41,28 +41,23 @@ export function activityOptionsFromProto(
   }
   return {
     taskQueue:
-      proto.taskQueue == null
-        ? undefined
-        : (taskQueueFromProto(proto.taskQueue) as string),
+      proto.taskQueue == null ? undefined : taskQueueFromProto(proto.taskQueue),
     retryPolicy: requiredField(
       retryPolicyFromProto(
         requiredField(proto.retryPolicy, "ActivityOptions", "retryPolicy"),
-      ) as common.RetryPolicy,
+      ),
       "ActivityOptions",
       "retryPolicy",
     ),
     scheduleToCloseTimeout:
       proto.scheduleToCloseTimeout == null
         ? undefined
-        : (durationFromProto(proto.scheduleToCloseTimeout) as common.Duration),
-    priority:
-      proto.priority == null
-        ? undefined
-        : (priorityFromProto(proto.priority) as common.Priority),
+        : durationFromProto(proto.scheduleToCloseTimeout),
+    priority: proto.priority == null ? undefined : priorityFromProto(proto.priority),
   };
 }
 
-export function activityOptionsToProto(
+function activityOptionsToProto(
   model: ActivityOptions | null | undefined,
 ): temporal.api.activity.v1.IActivityOptions | undefined {
   if (model == null) {
@@ -81,11 +76,20 @@ export function activityOptionsToProto(
   };
 }
 
+export const activityOptionsTransferTypeConverter = {
+  fromTransferType(value: temporal.api.activity.v1.IActivityOptions): ActivityOptions {
+    return activityOptionsFromProto(value)!;
+  },
+
+  toTransferType(value: ActivityOptions): temporal.api.activity.v1.IActivityOptions {
+    return activityOptionsToProto(value) ?? {};
+  },
+};
 export interface FailureContainer {
   failure?: Error;
 }
 
-export function failureContainerFromProto(
+function failureContainerFromProto(
   proto:
     | temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes
     | null
@@ -95,12 +99,11 @@ export function failureContainerFromProto(
     return undefined;
   }
   return {
-    failure:
-      proto.failure == null ? undefined : (failureFromProto(proto.failure) as Error),
+    failure: proto.failure == null ? undefined : failureFromProto(proto.failure),
   };
 }
 
-export function failureContainerToProto(
+function failureContainerToProto(
   model: FailureContainer | null | undefined,
 ): temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes | undefined {
   if (model == null) {
@@ -110,3 +113,17 @@ export function failureContainerToProto(
     failure: model.failure == null ? undefined : failureToProto(model.failure),
   };
 }
+
+export const failureContainerTransferTypeConverter = {
+  fromTransferType(
+    value: temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes,
+  ): FailureContainer {
+    return failureContainerFromProto(value)!;
+  },
+
+  toTransferType(
+    value: FailureContainer,
+  ): temporal.api.command.v1.IFailWorkflowExecutionCommandAttributes {
+    return failureContainerToProto(value) ?? {};
+  },
+};
