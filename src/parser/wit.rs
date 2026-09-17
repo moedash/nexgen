@@ -106,6 +106,7 @@ fn api_spec_from_wit(
                     entry.module_export = crate::spec::ModuleExport::Owned;
                 }
             }
+            continue;
         }
         services.push(service);
     }
@@ -3737,6 +3738,7 @@ interface types {
         assert_eq!(variant.cases[1].name, "type");
         assert_eq!(variant.cases[1].wire_name, "type");
         assert!(spec.types["types.choice"].is_module_export());
+        assert!(spec.services.is_empty());
 
         let service = parse(
             Language::Python,

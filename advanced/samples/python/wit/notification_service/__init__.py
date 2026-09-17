@@ -9,7 +9,6 @@ from .models import (
     OnCompleteRequestResultFailure,
     OnCompleteResponse,
 )
-from .services import OnCompleteRequestClient
 
 __all__ = [
     "OnCompleteRequest",
@@ -17,5 +16,4 @@ __all__ = [
     "OnCompleteRequestResultSuccess",
     "OnCompleteRequestResultFailure",
     "OnCompleteResponse",
-    "OnCompleteRequestClient",
 ]
