@@ -29,8 +29,8 @@ def install_notification_service_protos(monkeypatch: pytest.MonkeyPatch) -> None
     # supplies the concrete messages needed to exercise its converters.
     import temporalio.api
 
-    importlib.import_module("temporalio.api.common.v1.message_pb2")
-    importlib.import_module("temporalio.api.failure.v1.message_pb2")
+    _ = importlib.import_module("temporalio.api.common.v1.message_pb2")
+    _ = importlib.import_module("temporalio.api.failure.v1.message_pb2")
 
     descriptor_set = descriptor_pb2.FileDescriptorSet.FromString(
         (Path(__file__).parents[2] / "descriptors" / "temporal_api.bin").read_bytes()
@@ -40,8 +40,8 @@ def install_notification_service_protos(monkeypatch: pytest.MonkeyPatch) -> None
         for file in descriptor_set.file
         if file.package == "temporal.api.notificationservice.v1"
     )
-    pool: typing.Any = descriptor_pool.Default()
-    pool.Add(notification_file)
+    pool = typing.cast(typing.Any, descriptor_pool.Default())
+    _ = pool.Add(notification_file)
 
     service_module = types.ModuleType("temporalio.api.notificationservice")
     service_module.__path__ = []
@@ -51,10 +51,14 @@ def install_notification_service_protos(monkeypatch: pytest.MonkeyPatch) -> None
         "temporalio.api.notificationservice.v1.request_response_pb2"
     )
     for name in ["OnCompleteRequest", "OnCompleteResponse"]:
-        descriptor: typing.Any = pool.FindMessageTypeByName(
+        message_descriptor = pool.FindMessageTypeByName(
             f"temporal.api.notificationservice.v1.{name}"
         )
-        setattr(proto_module, name, message_factory.GetMessageClass(descriptor))
+        setattr(
+            proto_module,
+            name,
+            message_factory.GetMessageClass(message_descriptor),
+        )
 
     monkeypatch.setitem(sys.modules, service_module.__name__, service_module)
     monkeypatch.setitem(sys.modules, v1_module.__name__, v1_module)

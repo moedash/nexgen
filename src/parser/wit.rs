@@ -5007,6 +5007,8 @@ interface workflow-service {
     heartbeat-timeout: placeholder,
     /// @nexus.omit
     priority: placeholder,
+    /// @nexus.omit
+    start-delay: placeholder,
   }
 
   run: func(request: request) -> request;
@@ -5246,6 +5248,8 @@ interface workflow-service {
     run-id: option<string>,
     started: option<bool>,
     /// @nexus.omit
+    first-execution-run-id: placeholder,
+    /// @nexus.omit
     signal-link: placeholder,
   }
 
@@ -5314,6 +5318,8 @@ interface workflow-service {
     heartbeat-timeout: placeholder,
     /// @nexus.omit
     priority: placeholder,
+    /// @nexus.omit
+    start-delay: placeholder,
   }
 
   activity-options-operation: func(request: activity-options) -> activity-options;
