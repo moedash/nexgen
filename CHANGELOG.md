@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Experimental TypeScript System Nexus generation now emits operation-specific
+  Workflow outbound interceptor contracts and serialization-context registry metadata.
+
 ### Changed
 
 ### Deprecated
@@ -30,8 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Java resolves every alias use directly to the target class. Aliases work
   across files and in operation input/output positions without emitting an
   empty placeholder model.
-- Experimental TypeScript System Nexus generation now emits operation-specific
-  Workflow outbound interceptor contracts and serialization-context registry metadata.
 
 ### Changed
 
