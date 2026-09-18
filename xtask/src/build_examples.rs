@@ -449,6 +449,7 @@ fn build_example(repo_root: &Path, language: Language, example_id: &str) -> Resu
                 .examples
                 .get(example_id)
                 .is_some_and(|example| example.system_nexus),
+            ..Default::default()
         },
         language,
         input_paths,
@@ -488,6 +489,16 @@ fn build_json_example(repo_root: &Path, language: Language, id: &str) -> Result<
     Ok(())
 }
 
+/// The examples whose advanced output also carries a generated HTTP caller.
+///
+/// Opt-in per example rather than on for everything: the caller is a new target
+/// and turning it on everywhere would rewrite every language's committed output
+/// for a surface most of the examples do not exercise.
+const JSON_CLIENT_EXAMPLES: [&str; 1] = ["streams"];
+
+/// The targets that emit an HTTP caller.
+const CLIENT_LANGUAGES: [Language; 2] = [Language::Go, Language::Python];
+
 fn build_json_example_variant(
     repo_root: &Path,
     language: Language,
@@ -497,6 +508,7 @@ fn build_json_example_variant(
 ) -> Result<()> {
     let input_path = json_example_input_path(repo_root, input_id);
     let dir_name = example_directory_name(language, output_id);
+    let client = JSON_CLIENT_EXAMPLES.contains(&input_id) && CLIENT_LANGUAGES.contains(&language);
     for (mode, root) in [
         (
             GenerationMode::DefinitionsOnly,
@@ -512,6 +524,9 @@ fn build_json_example_variant(
         generate_to_file(&GenerateRequest {
             config: NexgenConfig {
                 mode,
+                // The caller is emitted into the advanced tree only, which is
+                // where the toolchain gates compile and type-check it.
+                client: client && mode == GenerationMode::NativeApi,
                 ..Default::default()
             },
             language,
@@ -779,7 +794,7 @@ mod tests {
     fn discovers_json_schema_example_ids_from_sample_file_names() {
         assert_eq!(
             discover_json_example_ids(&repo_root()).unwrap(),
-            ["chat", "kb", "showcase", "temporal"]
+            ["chat", "kb", "showcase", "streams", "temporal"]
         );
     }
 

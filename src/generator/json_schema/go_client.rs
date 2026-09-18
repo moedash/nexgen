@@ -83,7 +83,10 @@ pub(in crate::generator) fn render_client_file(
         render_payload_site_variables(&mut output, service);
     }
     for service in &plan.services {
-        render_service_client(&mut output, service);
+        // Per service: a service with nothing marked gets no codec knob even
+        // when a sibling service in the same module has one.
+        let codec = service.operations.iter().any(ClientOperation::has_payloads);
+        render_service_client(&mut output, service, codec);
     }
     Some(output)
 }
@@ -288,7 +291,7 @@ fn render_payload_site_variables(output: &mut String, service: &ClientService) {
     }
 }
 
-fn render_service_client(output: &mut String, service: &ClientService) {
+fn render_service_client(output: &mut String, service: &ClientService, codec: bool) {
     let type_name = client_type_name(service);
     let options_name = format!("{type_name}Options");
 
@@ -313,7 +316,11 @@ fn render_service_client(output: &mut String, service: &ClientService) {
     output.push_str(" struct {\n");
     output.push_str("\tbaseURL string\n");
     output.push_str("\thttpClient *http.Client\n");
-    output.push_str("\tcodec PayloadCodec\n");
+    // A contract with no marked payload gets no codec knob: there would be
+    // nothing for it to act on, and the interface would not be declared.
+    if codec {
+        output.push_str("\tcodec PayloadCodec\n");
+    }
     output.push_str("\theader http.Header\n");
     output.push_str("}\n\n");
 
@@ -331,13 +338,15 @@ fn render_service_client(output: &mut String, service: &ClientService) {
         "HTTPClient issues the requests. A nil value uses http.DefaultClient.",
     );
     output.push_str("\tHTTPClient *http.Client\n");
-    render_wrapped_go_doc_comment(
-        output,
-        "\t",
-        "Codec transforms the payloads the operations carry. A nil value passes them \
-         through untouched.",
-    );
-    output.push_str("\tCodec PayloadCodec\n");
+    if codec {
+        render_wrapped_go_doc_comment(
+            output,
+            "\t",
+            "Codec transforms the payloads the operations carry. A nil value passes them \
+             through untouched.",
+        );
+        output.push_str("\tCodec PayloadCodec\n");
+    }
     render_wrapped_go_doc_comment(output, "\t", "Header is added to every request.");
     output.push_str("\tHeader http.Header\n");
     output.push_str("}\n\n");
@@ -367,7 +376,9 @@ fn render_service_client(output: &mut String, service: &ClientService) {
     output.push_str("{\n");
     output.push_str("\t\tbaseURL: strings.TrimRight(baseURL, \"/\"),\n");
     output.push_str("\t\thttpClient: httpClient,\n");
-    output.push_str("\t\tcodec: options.Codec,\n");
+    if codec {
+        output.push_str("\t\tcodec: options.Codec,\n");
+    }
     output.push_str("\t\theader: options.Header,\n");
     output.push_str("\t}\n}\n\n");
 
@@ -487,12 +498,7 @@ fn render_operation_method(output: &mut String, type_name: &str, operation: &Cli
         None => output.push_str("\tbody := []byte(\"{}\")\n"),
     }
 
-    let assignment = if operation.input.is_some() {
-        "\traw, err := c.post(ctx, "
-    } else {
-        "\traw, err := c.post(ctx, "
-    };
-    output.push_str(assignment);
+    output.push_str("\traw, err := c.post(ctx, ");
     output.push_str(&literal(&operation.wire_name));
     output.push_str(", body)\n");
     output.push_str("\tif err != nil {\n");

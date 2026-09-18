@@ -96,7 +96,10 @@ pub(in crate::generator) fn render_client_module(plan: &ClientPlan) -> Option<St
         render_payload_site_constants(&mut output, service);
     }
     for service in &plan.services {
-        render_service_client(&mut output, service);
+        // Per service: a service with nothing marked gets no codec knob even
+        // when a sibling service in the same module has one.
+        let codec = service.operations.iter().any(ClientOperation::has_payloads);
+        render_service_client(&mut output, service, codec);
     }
     Some(output)
 }
@@ -279,7 +282,7 @@ fn render_payload_site_constants(output: &mut String, service: &ClientService) {
     }
 }
 
-fn render_service_client(output: &mut String, service: &ClientService) {
+fn render_service_client(output: &mut String, service: &ClientService, codec: bool) {
     let class_name = client_class_name(service);
     output.push_str("class ");
     output.push_str(&class_name);
@@ -301,14 +304,20 @@ fn render_service_client(output: &mut String, service: &ClientService) {
     output.push_str("        self,\n");
     output.push_str("        base_url: str,\n");
     output.push_str("        *,\n");
-    output.push_str("        codec: PayloadCodec | None = None,\n");
+    // A contract with no marked payload gets no codec knob: there would be
+    // nothing for it to act on, and the protocol would not be declared.
+    if codec {
+        output.push_str("        codec: PayloadCodec | None = None,\n");
+    }
     output.push_str("        headers: dict[str, str] | None = None,\n");
     output.push_str("        timeout: float = 30.0,\n");
     output.push_str("    ) -> None:\n");
     // Annotated explicitly: a target's strict type checker asks for it on a class
     // it cannot prove closed.
     output.push_str("        self._base_url: str = base_url.rstrip(\"/\")\n");
-    output.push_str("        self._codec: PayloadCodec | None = codec\n");
+    if codec {
+        output.push_str("        self._codec: PayloadCodec | None = codec\n");
+    }
     output.push_str("        self._headers: dict[str, str] = dict(headers or {})\n");
     output.push_str("        self._timeout: float = timeout\n");
 

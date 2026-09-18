@@ -1,0 +1,163 @@
+nexusrpc: "1.0.0"
+$schema: https://json-schema.org/draft/2020-12/schema
+description: >
+  A stream endpoint, exercising the three streaming annotations: an opaque
+  cursor type, codec-owned payloads, and a long-pollable read.
+services:
+  StreamService:
+    fqn: example.streams.v1.StreamService
+    description: >
+      Append records to a workflow's stream and read them back. Reads hand out
+      batches and an append carries one batch per call, because a call per
+      record costs too much for a token stream.
+    operations:
+      append:
+        fqn: append
+        description: >
+          Append one batch of records. A repeated batchIndex for the same
+          producer attempt is dropped, so a retried call writes once.
+        input: { $ref: "#/$defs/AppendInput" }
+        output: { $ref: "#/$defs/AppendOutput" }
+      read:
+        fqn: read
+        description: >
+          Answer with the records after the caller's token, or time out. The
+          call parks until it has maxRecords records or waitMs elapses,
+          whichever comes first, and answers with whatever it collected.
+        x-nexus-long-poll:
+          wait-field: waitMs
+          result-field: records
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+
+$defs:
+  AppendInput:
+    type: object
+    description: "One append call: who is writing, where, and what."
+    properties:
+      workflowId:
+        type: string
+        description: The workflow whose stream is being written.
+      stream:
+        type: string
+        description: The named stream to append to.
+      producerId:
+        type: string
+        description: >
+          Identifies the writer across its retries, so its attempts can be
+          ordered.
+      attempt:
+        type: integer
+        minimum: 1
+        description: >
+          The generation this producer is writing. A later attempt supersedes
+          an earlier one.
+      batchIndex:
+        type: integer
+        minimum: 1
+        description: >
+          Counts this producer's batches from 1. The handler drops an index it
+          has already written for this producer attempt.
+      payloads:
+        type: array
+        items:
+          type: string
+          contentEncoding: base64
+        x-nexus-payload: true
+        description: >
+          The records to write. Empty on a call that only finishes the
+          producer.
+      finish:
+        type: boolean
+        description: >
+          Mark this producer done after writing the batch, so a reader stops
+          waiting on it.
+    required:
+      - workflowId
+      - stream
+      - producerId
+      - attempt
+      - batchIndex
+    additionalProperties: false
+
+  AppendOutput:
+    type: object
+    description: Where the append landed, empty when it wrote nothing.
+    properties:
+      cursor:
+        type: string
+        x-nexus-cursor: StreamCursor
+        description: >
+          Names the last record written by this call. Empty when the call
+          carried no payloads.
+    additionalProperties: false
+
+  ReadInput:
+    type: object
+    description: "One read call: where to resume from and how long to wait."
+    properties:
+      workflowId:
+        type: string
+        description: The workflow whose stream is being read.
+      stream:
+        type: string
+        description: >
+          The named stream to read. Empty reads every stream the workflow
+          publishes.
+      afterToken:
+        type: string
+        x-nexus-cursor: StreamCursor
+        description: >
+          A token from an earlier record or append. Empty starts at the
+          beginning.
+      maxRecords:
+        type: integer
+        minimum: 1
+        description: Return at most this many records. Defaults to 100.
+      waitMs:
+        type: integer
+        minimum: 0
+        description: >
+          Wait at most this long for records to arrive before answering.
+          Defaults to 5000. A call that collects nothing answers with no
+          records and the caller's own token.
+    required:
+      - workflowId
+    additionalProperties: false
+
+  RecordWire:
+    type: object
+    description: "One record on the wire: its cursor and its frame."
+    properties:
+      token:
+        type: string
+        x-nexus-cursor: StreamCursor
+        description: Names this record. Pass it as afterToken to resume just past it.
+      frame:
+        type: string
+        contentEncoding: base64
+        x-nexus-payload: true
+        description: >
+          The record frame, carrying the topic, kind, producer, attempt,
+          sequence and body.
+    required:
+      - token
+      - frame
+    additionalProperties: false
+
+  ReadOutput:
+    type: object
+    description: What one read call answered, and where to resume.
+    properties:
+      records:
+        type: array
+        items:
+          $ref: "#/$defs/RecordWire"
+        description: The records after the caller's token, in stream order.
+      nextToken:
+        type: string
+        x-nexus-cursor: StreamCursor
+        description: >
+          Pass as afterToken on the following call. Echoes the caller's own
+          token when the call collected nothing.
+    additionalProperties: false
