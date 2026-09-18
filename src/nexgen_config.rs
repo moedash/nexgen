@@ -11,6 +11,11 @@ use crate::generator::GenerationMode;
 pub struct NexgenConfig {
     pub mode: GenerationMode,
     pub system_nexus: bool,
+    /// Emit an HTTP caller for each service alongside the bindings. It is
+    /// orthogonal to `mode`: the workflow-side client the NativeApi surface
+    /// emits calls Nexus through a workflow, while this one is for a process
+    /// outside the worker talking to the HTTP ingress.
+    pub client: bool,
 }
 
 impl Default for NexgenConfig {
@@ -18,6 +23,7 @@ impl Default for NexgenConfig {
         Self {
             mode: GenerationMode::DefinitionsOnly,
             system_nexus: false,
+            client: false,
         }
     }
 }
@@ -58,6 +64,7 @@ mod tests {
         let outer = NexgenConfig {
             mode: GenerationMode::DefinitionsOnly,
             system_nexus: true,
+            ..Default::default()
         };
         {
             let _outer_scope = scope(outer);
@@ -77,6 +84,7 @@ mod tests {
         let config = NexgenConfig {
             mode: GenerationMode::DefinitionsOnly,
             system_nexus: true,
+            ..Default::default()
         };
         {
             let _scope = scope(config);

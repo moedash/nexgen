@@ -1598,6 +1598,10 @@ fn render_external_models(
         .copied()
         .chain(foreign.iter().copied())
         .collect::<Vec<_>>();
+    render_cursor_types(
+        &mut output,
+        &crate::json_schema::streaming::cursor_type_names(models.iter().map(|model| &model.schema)),
+    );
     render_const_discriminators(&mut output, models)?;
     // Declared here: the unions this file's own models define. Known here: those
     // plus the closure's other files', so a `$ref` to a foreign named union
@@ -1840,6 +1844,25 @@ fn render_validator_core(output: &mut String) {
 /// the primitive (`type ShowcaseStatus string`) plus one typed constant per
 /// member (`const ShowcaseStatusActive ShowcaseStatus = "active"`). See
 /// `specs/json-schema/features/{const,enum}.md`.
+/// The opaque token types the contract declares (`x-nexus-cursor`).
+///
+/// A named string type rather than a `string` alias: a caller holding a token in
+/// one of these cannot pass a bare `string` into its place without saying so.
+/// The wire models keep `string`, so the JSON on the wire is unchanged.
+fn render_cursor_types(output: &mut String, cursor_names: &[String]) {
+    for name in cursor_names {
+        output.push('\n');
+        render_wrapped_go_doc_comment(
+            output,
+            "",
+            &crate::json_schema::streaming::cursor_doc(name, " "),
+        );
+        output.push_str("type ");
+        output.push_str(name);
+        output.push_str(" string\n");
+    }
+}
+
 fn render_const_discriminators(output: &mut String, models: &[&PlannedJsonType]) -> Result<()> {
     struct Declared {
         type_name: String,

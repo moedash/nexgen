@@ -27,6 +27,27 @@ pub const LONG_POLL_WAIT_MEMBER: &str = "wait-field";
 /// The `x-nexus-long-poll` member naming the output's emptiness-test member.
 pub const LONG_POLL_RESULT_MEMBER: &str = "result-field";
 
+/// The two rules a caller must not break. They are generator-owned rather than
+/// copied from the authored `description`: a contract that words them
+/// differently would still have to mean this.
+const CURSOR_RULES: [&str; 2] = [
+    "The value is never parsed, compared or constructed by a caller; only the endpoint that issued it can interpret it.",
+    "Pass one back to resume strictly after the record it names, so that record is never delivered twice.",
+];
+
+/// The documentation an emitted token type carries.
+///
+/// The lead sentence names the type so it satisfies Go's godoc convention and
+/// still reads correctly as a Python docstring. `paragraph_separator` is the
+/// target's paragraph break: a space for a target whose doc comment is one
+/// wrapped paragraph, `"\n\n"` for one that keeps paragraphs.
+pub fn cursor_doc(name: &str, paragraph_separator: &str) -> String {
+    format!(
+        "{name} is an opaque resume token issued by the endpoint.{paragraph_separator}{}{paragraph_separator}{}",
+        CURSOR_RULES[0], CURSOR_RULES[1]
+    )
+}
+
 /// The token type a schema node declares itself a cursor for.
 pub fn cursor_name(schema: &Value) -> Option<&str> {
     schema.get(CURSOR_KEYWORD)?.as_str()
@@ -224,10 +245,9 @@ fn collect_payload_sites<'a>(
     }
 }
 
-/// The model identity inside a `#/$defs/<name>` reference, used only by the
-/// cycle guard. A cross-file reference keeps its file part, which is enough to
-/// tell two models apart.
-fn ref_full_name(reference: &str) -> &str {
+/// The model identity inside a `#/$defs/<name>` reference. A cross-file
+/// reference keeps its file part, which is enough to tell two models apart.
+pub fn ref_full_name(reference: &str) -> &str {
     reference
         .rsplit_once("#/$defs/")
         .map(|(_, name)| name)

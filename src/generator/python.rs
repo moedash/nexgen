@@ -5,7 +5,9 @@ use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use indexmap::IndexMap;
 
 use crate::error::{Error, Result};
+use crate::generator::json_schema::client::ClientPlan;
 use crate::generator::json_schema::python as python_json;
+use crate::generator::json_schema::python_client;
 use crate::generator::proto::python as python_proto;
 use crate::generator::render_request_plan;
 use crate::generator::{
@@ -340,6 +342,10 @@ impl PythonExternalModels {
 
     fn owns_variant(&self, full_name: &str) -> bool {
         self.proto.owns_variant(full_name)
+    }
+
+    fn client_plan(&self, api_plan: &PlannedSpec) -> ClientPlan {
+        self.json.client_plan(api_plan)
     }
 
     fn render_support_files(&self) -> Result<BTreeMap<PathBuf, String>> {
@@ -737,6 +743,17 @@ impl<'a> ApiPlanner<'a> {
                 "_system_nexus_interceptor.py",
                 render_system_nexus_interceptor(services),
                 GeneratedFileOrigin::fixed("generated Python system Nexus interceptor"),
+            )?;
+        }
+        if crate::nexgen_config::current().client
+            && let Some(client_source) = python_client::render_client_module(
+                &self.external_models.client_plan(self.api_plan),
+            )
+        {
+            files.insert(
+                python_client::CLIENT_MODULE,
+                client_source,
+                GeneratedFileOrigin::fixed("generated Python HTTP caller"),
             )?;
         }
 
