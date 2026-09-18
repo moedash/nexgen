@@ -14,8 +14,8 @@ use crate::generator::json_schema::{java, python, typescript};
 use crate::language::Language;
 use crate::spec::{
     ApiSpec, ExternalTypeBindingSpec, ExternalTypeSpec, JsonModelBindingSpec, JsonModelSpec,
-    LanguageStringSpec, ModulePath, OperationSpec, ServiceSpec, SupportSpec, Symbol, TypeDeclEntry,
-    TypeDeclSpec, TypeSpec,
+    LanguageStringSpec, ModulePath, OperationLongPollSpec, OperationSpec, ServiceSpec, SupportSpec,
+    Symbol, TypeDeclEntry, TypeDeclSpec, TypeSpec,
 };
 use crate::spec::{ApiSpecBranch, ApiSpecLeaf, ApiSpecNode, ApiSpecTree};
 
@@ -394,6 +394,12 @@ impl Schema {
 /// per-target lookup).
 const LANG_NAME_KEYWORDS: [&str; 4] = ["x-go-name", "x-ts-name", "x-py-name", "x-java-name"];
 
+use crate::json_schema::streaming::{
+    CURSOR_KEYWORD as NEXUS_CURSOR_KEYWORD, LONG_POLL_KEYWORD as NEXUS_LONG_POLL_KEYWORD,
+    LONG_POLL_RESULT_MEMBER as NEXUS_LONG_POLL_RESULT_MEMBER,
+    LONG_POLL_WAIT_MEMBER as NEXUS_LONG_POLL_WAIT_MEMBER, PAYLOAD_KEYWORD as NEXUS_PAYLOAD_KEYWORD,
+};
+
 /// Keywords admitted by the strict schema-node grammar. This is deliberately
 /// an exact allowlist: supported keywords, specifically rejected keywords, and
 /// generator extensions all have an owner below. Anything else is a typo or a
@@ -454,6 +460,84 @@ fn schema_extra_keyword_is_known(keyword: &str) -> bool {
             | "x-go-enum-names"
             | "x-java-enum-names"
     ) || LANG_NAME_KEYWORDS.contains(&keyword)
+        || matches!(keyword, NEXUS_CURSOR_KEYWORD | NEXUS_PAYLOAD_KEYWORD)
+}
+
+/// Whether a node declares its bytes to be codec-owned payloads.
+fn nexus_payload_marked(schema: &Schema) -> bool {
+    schema
+        .extra
+        .get(NEXUS_PAYLOAD_KEYWORD)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Whether a node lowers to a language-native bytes type, which is the only
+/// shape a codec can act on without the generator inventing a transport.
+fn materializes_to_bytes(schema: &Schema) -> bool {
+    schema.ty.as_ref().and_then(Value::as_str) == Some("string")
+        && schema
+            .extra
+            .get("contentEncoding")
+            .and_then(Value::as_str)
+            .and_then(crate::json_schema::content_encoding::Encoding::from_name)
+            .is_some()
+}
+
+fn validate_nexus_annotations(path: &Path, schema: &Schema, context: &str) -> Result<()> {
+    let reject = |reason: String| -> Result<()> {
+        Err(Error::InvalidJsonSchema {
+            path: path.to_path_buf(),
+            reason: format!("{context}: {reason}"),
+        })
+    };
+
+    if let Some(value) = schema.extra.get(NEXUS_CURSOR_KEYWORD) {
+        let Some(name) = value.as_str() else {
+            return reject(format!(
+                "`{NEXUS_CURSOR_KEYWORD}` must be a string naming the emitted token type, got {value}"
+            ));
+        };
+        if !name_matches(name, true) {
+            return reject(format!(
+                "`{NEXUS_CURSOR_KEYWORD}` name `{name}` must match `^[A-Z][a-zA-Z\\d]+$`; it names an emitted type"
+            ));
+        }
+        if schema.ty.as_ref().and_then(Value::as_str) != Some("string") {
+            return reject(format!(
+                "`{NEXUS_CURSOR_KEYWORD}` requires `type: string`; a resume token travels as text"
+            ));
+        }
+        if schema.extra.contains_key("contentEncoding") {
+            return reject(format!(
+                "`{NEXUS_CURSOR_KEYWORD}` and `contentEncoding` are mutually exclusive; a token is never decoded, so it has no encoding"
+            ));
+        }
+        if nexus_payload_marked(schema) {
+            return reject(format!(
+                "`{NEXUS_CURSOR_KEYWORD}` and `{NEXUS_PAYLOAD_KEYWORD}` are mutually exclusive on one node"
+            ));
+        }
+    }
+
+    if let Some(value) = schema.extra.get(NEXUS_PAYLOAD_KEYWORD) {
+        if !value.is_boolean() {
+            return reject(format!(
+                "`{NEXUS_PAYLOAD_KEYWORD}` must be a boolean, got {value}"
+            ));
+        }
+        if value.as_bool() == Some(true) {
+            let items_are_bytes = schema.ty.as_ref().and_then(Value::as_str) == Some("array")
+                && schema.items.as_deref().is_some_and(materializes_to_bytes);
+            if !materializes_to_bytes(schema) && !items_are_bytes {
+                return reject(format!(
+                    "`{NEXUS_PAYLOAD_KEYWORD}` requires a node that materializes to bytes; add `contentEncoding: base64` (or `base64url`) to this node or, for a batch, to its `items`"
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1587,6 +1671,10 @@ fn validate_raw_document_grammar(path: &Path, doc: &Document) -> Result<()> {
                         }
                         continue;
                     }
+                    if keyword == NEXUS_LONG_POLL_KEYWORD {
+                        validate_long_poll_grammar(path, operation_name, value)?;
+                        continue;
+                    }
                     return reject(format!(
                         "operation `{operation_name}` has unknown keyword `{keyword}`"
                     ));
@@ -1662,6 +1750,44 @@ fn validate_document_markers(path: &Path, doc: &Document) -> Result<()> {
             path: path.to_path_buf(),
             reason: "plain JSON schema files must define a root schema or `$defs`".to_string(),
         });
+    }
+    Ok(())
+}
+
+/// Validates the shape of an `x-nexus-long-poll` value. Whether the two named
+/// members exist is checked later, in [`build_operation`], where the input and
+/// output models are resolved.
+fn validate_long_poll_grammar(path: &Path, operation_name: &str, value: &Value) -> Result<()> {
+    let reject = |reason: String| -> Result<()> {
+        Err(Error::InvalidJsonSchema {
+            path: path.to_path_buf(),
+            reason: format!("operation `{operation_name}`: {reason}"),
+        })
+    };
+    let Some(members) = value.as_object() else {
+        return reject(format!(
+            "`{NEXUS_LONG_POLL_KEYWORD}` must be an object with `{NEXUS_LONG_POLL_WAIT_MEMBER}` and `{NEXUS_LONG_POLL_RESULT_MEMBER}`, got {value}"
+        ));
+    };
+    for member in members.keys() {
+        if member != NEXUS_LONG_POLL_WAIT_MEMBER && member != NEXUS_LONG_POLL_RESULT_MEMBER {
+            return reject(format!(
+                "`{NEXUS_LONG_POLL_KEYWORD}` has unknown member `{member}`; it takes `{NEXUS_LONG_POLL_WAIT_MEMBER}` and `{NEXUS_LONG_POLL_RESULT_MEMBER}`"
+            ));
+        }
+    }
+    for member in [NEXUS_LONG_POLL_WAIT_MEMBER, NEXUS_LONG_POLL_RESULT_MEMBER] {
+        let Some(named) = members.get(member) else {
+            return reject(format!("`{NEXUS_LONG_POLL_KEYWORD}` requires `{member}`"));
+        };
+        match named.as_str() {
+            Some(name) if !name.trim().is_empty() => {}
+            _ => {
+                return reject(format!(
+                    "`{NEXUS_LONG_POLL_KEYWORD}.{member}` must be a non-empty string naming a member of the operation's model, got {named}"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -2317,6 +2443,7 @@ fn unsupported_keyword_reason(keyword: &str) -> &'static str {
 fn validate_schema_common(path: &Path, schema: &Schema, context: &str) -> Result<()> {
     validate_schema_keyword_allowlist(path, schema, context)?;
     validate_legacy_dependencies(path, schema, context)?;
+    validate_nexus_annotations(path, schema, context)?;
     // A malformed `type` is its own defect, not an absent one. It used to be
     // reported as "a leaf schema requires an explicit `type`" — and on a node
     // that also carries `$ref` or `oneOf` it was never reported at all, because
@@ -6160,6 +6287,8 @@ fn build_operation(
         None
     };
 
+    let long_poll = build_long_poll(path, canonical_path, operation_key, operation, docs, models)?;
+
     Ok(OperationSpec {
         name: operation_name.clone(),
         code_name: language_string_override(language, code_name),
@@ -6170,6 +6299,7 @@ fn build_operation(
             .get("deprecated")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        long_poll,
         doc: language_string(operation.description.clone()),
         return_doc: LanguageStringSpec::default(),
         input,
@@ -6178,6 +6308,77 @@ fn build_operation(
         serialization_context: LanguageStringSpec::default(),
         data: (),
     })
+}
+
+/// Lowers `x-nexus-long-poll` and checks that the two members it names exist on
+/// the operation's models. The grammar is already validated; a name that does
+/// not resolve would otherwise surface as a compile error in generated caller
+/// code, far from the contract that caused it.
+fn build_long_poll(
+    path: &Path,
+    canonical_path: &Path,
+    operation_key: &str,
+    operation: &Operation,
+    docs: &IndexMap<PathBuf, (PathBuf, Document)>,
+    models: &BTreeMap<TypeKey, JsonModel>,
+) -> Result<Option<OperationLongPollSpec>> {
+    let Some(members) = operation
+        .extra
+        .get(NEXUS_LONG_POLL_KEYWORD)
+        .and_then(Value::as_object)
+    else {
+        return Ok(None);
+    };
+    let named = |member: &str| -> String {
+        members
+            .get(member)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let spec = OperationLongPollSpec {
+        wait_field: named(NEXUS_LONG_POLL_WAIT_MEMBER),
+        result_field: named(NEXUS_LONG_POLL_RESULT_MEMBER),
+    };
+
+    for (label, member, schema) in [
+        ("input", spec.wait_field.as_str(), operation.input.as_ref()),
+        (
+            "output",
+            spec.result_field.as_str(),
+            operation.output.as_ref(),
+        ),
+    ] {
+        let Some(schema) = schema else {
+            return Err(Error::InvalidJsonSchema {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` names the {label} member `{member}`, but the operation declares no {label}"
+                ),
+            });
+        };
+        let properties = if let Some(reference) = &schema.reference {
+            resolve_ref(path, canonical_path, reference, docs, models)?
+                .schema
+                .properties
+                .clone()
+        } else {
+            schema.properties.clone()
+        };
+        // A model without `properties` is a shape this check cannot speak
+        // about (a map, a union); leave it to the emitter's own resolution.
+        if let Some(properties) = properties
+            && !properties.contains_key(member)
+        {
+            return Err(Error::InvalidJsonSchema {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` names the {label} member `{member}`, which the {label} model does not declare"
+                ),
+            });
+        }
+    }
+    Ok(Some(spec))
 }
 
 fn operation_model_type(
@@ -10690,6 +10891,257 @@ services:
         );
         assert!(spec.services[0].deprecated);
         assert!(spec.services[0].operations[0].deprecated);
+    }
+
+    #[test]
+    fn keeps_streaming_annotations_on_the_loaded_model() {
+        let schema = model_schema(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      after_token: { type: string, x-nexus-cursor: StreamCursor }
+      frame:
+        type: string
+        contentEncoding: base64
+        x-nexus-payload: true
+"##,
+            "ReadInput",
+        );
+        assert_eq!(
+            schema["properties"]["after_token"]["x-nexus-cursor"],
+            "StreamCursor"
+        );
+        assert_eq!(schema["properties"]["frame"]["x-nexus-payload"], true);
+    }
+
+    #[test]
+    fn lowers_the_long_poll_annotation() {
+        let spec = parse(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        x-nexus-long-poll:
+          wait-field: wait_ms
+          result-field: records
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+      append:
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      wait_ms: { type: integer }
+  ReadOutput:
+    type: object
+    properties:
+      records: { type: array, items: { type: string } }
+"##,
+        );
+        let long_poll = spec.services[0].operations[0]
+            .long_poll
+            .as_ref()
+            .expect("read declares a long-poll contract");
+        assert_eq!(long_poll.wait_field, "wait_ms");
+        assert_eq!(long_poll.result_field, "records");
+        assert!(spec.services[0].operations[1].long_poll.is_none());
+    }
+
+    #[test]
+    fn rejects_a_cursor_on_a_node_that_is_not_a_string() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      after_token: { type: integer, x-nexus-cursor: StreamCursor }
+"##,
+        );
+        assert!(
+            error.contains("`x-nexus-cursor` requires `type: string`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_cursor_type_name_that_is_not_an_identifier() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      after_token: { type: string, x-nexus-cursor: stream_cursor }
+"##,
+        );
+        assert!(
+            error.contains("`x-nexus-cursor` name `stream_cursor` must match"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_payload_that_does_not_materialize_to_bytes() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      append:
+        input: { $ref: "#/$defs/AppendInput" }
+$defs:
+  AppendInput:
+    type: object
+    properties:
+      payloads:
+        type: array
+        items: { type: string }
+        x-nexus-payload: true
+"##,
+        );
+        assert!(
+            error.contains("`x-nexus-payload` requires a node that materializes to bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_payload_batch_whose_items_carry_the_encoding() {
+        let schema = model_schema(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      append:
+        input: { $ref: "#/$defs/AppendInput" }
+$defs:
+  AppendInput:
+    type: object
+    properties:
+      payloads:
+        type: array
+        items: { type: string, contentEncoding: base64 }
+        x-nexus-payload: true
+"##,
+            "AppendInput",
+        );
+        assert_eq!(schema["properties"]["payloads"]["x-nexus-payload"], true);
+    }
+
+    #[test]
+    fn rejects_a_cursor_that_is_also_a_payload() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      token:
+        type: string
+        x-nexus-cursor: StreamCursor
+        x-nexus-payload: true
+"##,
+        );
+        assert!(error.contains("mutually exclusive on one node"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_long_poll_member_the_model_does_not_declare() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        x-nexus-long-poll:
+          wait-field: wait_ms
+          result-field: entries
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      wait_ms: { type: integer }
+  ReadOutput:
+    type: object
+    properties:
+      records: { type: array, items: { type: string } }
+"##,
+        );
+        assert!(
+            error.contains(
+                "names the output member `entries`, which the output model does not declare"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_long_poll_object_with_an_unknown_member() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        x-nexus-long-poll:
+          wait-field: wait_ms
+          result-field: records
+          deadline: 30
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      wait_ms: { type: integer }
+  ReadOutput:
+    type: object
+    properties:
+      records: { type: array, items: { type: string } }
+"##,
+        );
+        assert!(
+            error.contains("`x-nexus-long-poll` has unknown member `deadline`"),
+            "{error}"
+        );
     }
 
     #[test]
