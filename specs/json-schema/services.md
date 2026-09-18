@@ -650,6 +650,8 @@ emission code rather than duplicate it:
   reference graph the synthesized I/O types join.
 - [[properties]] — shared 4-stage identifier algorithm, `x-<lang>-name`,
   P15 collision policy.
+- [[streaming]] — the three `x-nexus-*` annotations, one of which
+  (`x-nexus-long-poll`) sits on an `operations:` entry.
 - [[generated-file-layout]] — module placement, Java separate-file rule,
   aggregator re-exports.
 - [[type]], [[nullability]] — I/O base-type and optional/nullable

@@ -6,6 +6,8 @@
 //! the emitters that honor them share one vocabulary. Everything in this module
 //! reads authored JSON Schema and yields wire-level facts (member names, array
 //! hops); no target-language policy lives here.
+//!
+//! See `specs/json-schema/features/streaming.md` for the authoritative rules.
 
 use std::collections::{BTreeMap, BTreeSet};
 
