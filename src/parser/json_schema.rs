@@ -6310,10 +6310,15 @@ fn build_operation(
     })
 }
 
-/// Lowers `x-nexus-long-poll` and checks that the two members it names exist on
-/// the operation's models. The grammar is already validated; a name that does
-/// not resolve would otherwise surface as a compile error in generated caller
-/// code, far from the contract that caused it.
+/// Lowers `x-nexus-long-poll` and checks the two members it names against the
+/// operation's models. The grammar is already validated; a name that does not
+/// resolve, or resolves to a shape a loop cannot drive, would otherwise surface
+/// as a compile error inside generated caller code, far from the contract that
+/// caused it.
+///
+/// The wait hint must be an `integer` (milliseconds) and the emptiness test an
+/// `array`. Pinning both keeps every target's emitted loop a fixed shape: one
+/// numeric assignment and one length test.
 fn build_long_poll(
     path: &Path,
     canonical_path: &Path,
@@ -6341,11 +6346,17 @@ fn build_long_poll(
         result_field: named(NEXUS_LONG_POLL_RESULT_MEMBER),
     };
 
-    for (label, member, schema) in [
-        ("input", spec.wait_field.as_str(), operation.input.as_ref()),
+    for (label, member, required_type, schema) in [
+        (
+            "input",
+            spec.wait_field.as_str(),
+            "integer",
+            operation.input.as_ref(),
+        ),
         (
             "output",
             spec.result_field.as_str(),
+            "array",
             operation.output.as_ref(),
         ),
     ] {
@@ -6367,13 +6378,22 @@ fn build_long_poll(
         };
         // A model without `properties` is a shape this check cannot speak
         // about (a map, a union); leave it to the emitter's own resolution.
-        if let Some(properties) = properties
-            && !properties.contains_key(member)
-        {
+        let Some(properties) = properties else {
+            continue;
+        };
+        let Some(property) = properties.get(member) else {
             return Err(Error::InvalidJsonSchema {
                 path: path.to_path_buf(),
                 reason: format!(
                     "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` names the {label} member `{member}`, which the {label} model does not declare"
+                ),
+            });
+        };
+        if property.ty.as_ref().and_then(Value::as_str) != Some(required_type) {
+            return Err(Error::InvalidJsonSchema {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` {label} member `{member}` must be `type: {required_type}`; a generated loop assigns the wait hint as a number of milliseconds and ends on the result array being non-empty"
                 ),
             });
         }

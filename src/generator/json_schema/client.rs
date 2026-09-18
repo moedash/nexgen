@@ -34,6 +34,15 @@ impl ClientModel {
         self.schema.get("properties")?.get(wire_name)
     }
 
+    /// Whether a top-level member is required, which decides whether a target
+    /// holds it behind an optional.
+    pub(in crate::generator) fn member_required(&self, wire_name: &str) -> bool {
+        self.schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|required| required.iter().any(|name| name.as_str() == Some(wire_name)))
+    }
+
     pub(in crate::generator) fn payload_sites(&self) -> &[PayloadSite] {
         &self.facts.payload_sites
     }

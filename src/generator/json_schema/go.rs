@@ -1844,6 +1844,56 @@ fn render_validator_core(output: &mut String) {
 /// the primitive (`type ShowcaseStatus string`) plus one typed constant per
 /// member (`const ShowcaseStatusActive ShowcaseStatus = "active"`). See
 /// `specs/json-schema/features/{const,enum}.md`.
+/// The HTTP caller's plan for one input file in the generate closure.
+///
+/// The models are the whole closure's, name-resolved exactly as
+/// [`ModelBackend::prepare`] resolves them, so a `$ref` crossing input files
+/// still reaches its target and every emitted type name matches the structs.
+pub(in crate::generator) fn client_plan(
+    api_plan: &PlannedSpec,
+    tree_models: &[PlannedJsonType],
+) -> Result<crate::generator::json_schema::client::ClientPlan> {
+    use crate::generator::json_schema::client::{ClientNaming, build_client_plan};
+
+    let manifest = build_json_name_manifest(crate::language::Language::Go, api_plan)?;
+    let mut cross_module_names = BTreeMap::new();
+    register_cross_module_ref_names(api_plan, &mut cross_module_names);
+    let mut models = tree_models.to_vec();
+    for model in &mut models {
+        if let Some(resolved) = manifest.type_name(&model.full_name) {
+            model.model_name = resolved.to_string();
+        } else if let Some(resolved) = cross_module_names.get(&model.full_name) {
+            model.model_name = resolved.clone();
+        }
+    }
+    let resolved_names = models
+        .iter()
+        .map(|model| (model.full_name.clone(), model.model_name.clone()))
+        .collect();
+    Ok(build_client_plan(
+        api_plan,
+        &models,
+        &resolved_names,
+        crate::language::Language::Go,
+        &ClientNaming {
+            service: &|service| {
+                service
+                    .code_name
+                    .for_language(crate::language::Language::Go)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| go_field_name(&service.name))
+            },
+            operation: &|operation| {
+                operation
+                    .code_name
+                    .for_language(crate::language::Language::Go)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| go_field_name(&operation.name))
+            },
+        },
+    ))
+}
+
 /// The opaque token types the contract declares (`x-nexus-cursor`).
 ///
 /// A named string type rather than a `string` alias: a caller holding a token in
