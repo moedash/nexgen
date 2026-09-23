@@ -17,6 +17,7 @@ in the wrapper is the requirements list below.
 | `x-nexus-cursor` | a `type: string` node | the emitted token type's name |
 | `x-nexus-payload` | a bytes node, or an array of them | `true` |
 | `x-nexus-long-poll` | an `operations:` entry | `{wait-field, result-field}` |
+| `x-nexus-handle` | a `services:` entry | emitted handle type names to their key member lists |
 
 ```yaml
 services:
@@ -122,6 +123,49 @@ parse under one build of the binary and fail under another, which is worse
 than a slightly wider authored vocabulary. A target that does not act on an
 annotation still accepts it, so one contract stays portable.
 
+## The handle projection, specified but not emitted
+
+The three keywords above still leave the largest piece of every wrapper
+hand-written: the object that binds a stream's identity once and exposes the
+operations as methods. The shipping Python provider writes it as
+`NexusStreamHandle` and `NexusProducer`; every other language would write the
+same two classes again. A fourth keyword names that projection:
+
+```yaml
+services:
+  TemporalStreams:
+    x-nexus-handle:
+      StreamHandle: [workflow_id, run_id]
+      StreamProducer: [workflow_id, run_id, topic, producer_id, attempt]
+```
+
+The rules:
+
+- The value maps an emitted type name to an ordered key set of **wire** member
+  names, resolved through each emitter's `x-<lang>-name` mapping, the same
+  rule as the long-poll members.
+- An operation joins a handle when its input carries every key member. The
+  generated method drops those members from its signature and injects the
+  bound values; the rest of the signature stays. An operation missing a key
+  member stays off that handle.
+- A handle whose key set extends another's is constructible from it, so
+  `handle.producer(topic, producer_id, attempt)` falls out of the key sets
+  rather than being declared.
+- A key member that is optional on the wire may be bound absent, and the
+  handle sends what it holds. Binding is construction-time only; a handle
+  carries no other state, so the endpoint stays as stateless as the flat
+  calls leave it.
+- The flat client stays emitted, and handles are a projection over it:
+  nothing about the wire, the handler, or a caller that ignores the keyword
+  changes. A long-poll loop method appears on the handle like any other
+  operation method.
+
+Unlike the other three, this one is specified without an implementation. The
+parser arm, the Python and Go emitters and their goldens are a follow-on, and
+the open questions below come first: the cursor's place in the wire model and
+the serialization entry point decide what a generated handle method may
+touch.
+
 ## Open questions
 
 **1. Should the wire model's member carry the cursor type?**
@@ -168,5 +212,7 @@ the Python backend do the same, or should a caller keep reaching inside?
   `from <package>.client import ...`.
 - The looping method's name is derived, so a contract with an operation
   already called `read_until_records` would collide. Nothing checks that.
+- `x-nexus-handle` is specified above and not implemented; nothing parses
+  or emits it yet.
 - The cursor type name is not checked against the model names it shares a
   namespace with.
