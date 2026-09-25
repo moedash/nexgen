@@ -6383,7 +6383,9 @@ fn build_long_poll(
             return Err(Error::InvalidJsonSchema {
                 path: path.to_path_buf(),
                 reason: format!(
-                    "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` requires a `properties`-shaped {label} model to name `{member}` in; this {label} declares no `properties`"
+                    "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` requires a \
+                     `properties`-shaped {label} model to name `{member}` in; this {label} \
+                     declares no `properties`"
                 ),
             });
         };

@@ -743,4 +743,3 @@ fn render_long_poll_method(
     output.push_str("\t\t} else {\n\t\t\tbackoff = longPollMinBackoff\n\t\t}\n");
     output.push_str("\t}\n}\n\n");
 }
-

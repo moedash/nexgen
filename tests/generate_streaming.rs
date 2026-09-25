@@ -446,7 +446,10 @@ fn go_declares_the_cursor_type_without_a_client() {
     // Go flattens the closure into one package, so the token type lands in the
     // file whose census spans it rather than beside each file's models.
     let definitions = file(&files, "definitions.go");
-    assert!(definitions.contains("type StreamCursor string"), "{definitions}");
+    assert!(
+        definitions.contains("type StreamCursor string"),
+        "{definitions}"
+    );
     assert!(
         definitions.contains("// StreamCursor is an opaque resume token issued by the endpoint."),
         "{definitions}"
@@ -531,7 +534,10 @@ fn go_client_loops_the_long_poll_operation_through_a_pointer_wait_hint() {
         "{client}"
     );
     // An optional wait hint is a pointer field, so the attempt takes its address.
-    assert!(client.contains("attempt.WaitMs = &milliseconds"), "{client}");
+    assert!(
+        client.contains("attempt.WaitMs = &milliseconds"),
+        "{client}"
+    );
     assert!(client.contains("if len(answer.Records) > 0 {"), "{client}");
     assert!(
         client.contains("next, err := c.Read(ctx, attempt)"),
@@ -539,9 +545,18 @@ fn go_client_loops_the_long_poll_operation_through_a_pointer_wait_hint() {
     );
     // The ask is clamped to the transport, and an empty answer that came back
     // faster than the wait it asked for is paced.
-    assert!(client.contains("wait := c.pollBudget(time.Until(end))"), "{client}");
-    assert!(client.contains("if time.Since(started) < wait/2 {"), "{client}");
-    assert!(client.contains("backoff = longPollNextBackoff(backoff)"), "{client}");
+    assert!(
+        client.contains("wait := c.pollBudget(time.Until(end))"),
+        "{client}"
+    );
+    assert!(
+        client.contains("if time.Since(started) < wait/2 {"),
+        "{client}"
+    );
+    assert!(
+        client.contains("backoff = longPollNextBackoff(backoff)"),
+        "{client}"
+    );
     assert!(
         client.contains("if !errors.As(err, &status) || !status.Retryable()"),
         "{client}"
@@ -560,7 +575,10 @@ fn go_client_assigns_a_required_wait_hint_by_value() {
     );
     let client = file(&files, "client.go");
     assert!(client.contains("attempt.WaitMs = milliseconds"), "{client}");
-    assert!(!client.contains("attempt.WaitMs = &milliseconds"), "{client}");
+    assert!(
+        !client.contains("attempt.WaitMs = &milliseconds"),
+        "{client}"
+    );
     fs::remove_dir_all(temp_dir).unwrap();
 }
 
@@ -613,7 +631,6 @@ fn the_other_targets_ignore_the_streaming_annotations() {
         fs::remove_dir_all(temp_dir).unwrap();
     }
 }
-
 
 /// A long-poll operation whose output is a map, which has no member to name.
 const MAP_OUTPUT_CONTRACT: &str = r##"
@@ -723,10 +740,7 @@ fn a_payload_the_walk_cannot_reach_is_refused() {
         message.contains("additionalProperties: `x-nexus-payload`"),
         "{message}"
     );
-    assert!(
-        message.contains("cannot address it"),
-        "{message}"
-    );
+    assert!(message.contains("cannot address it"), "{message}");
 }
 
 #[test]
@@ -748,9 +762,8 @@ fn the_go_walker_uses_each_site_own_alphabet() {
     );
     let client = file(&files, "client.go");
     assert!(
-        client.contains(
-            "{steps: []payloadStep{{member: \"padded\"}}, encoding: base64.StdEncoding}"
-        ),
+        client
+            .contains("{steps: []payloadStep{{member: \"padded\"}}, encoding: base64.StdEncoding}"),
         "{client}"
     );
     assert!(
@@ -766,12 +779,18 @@ fn the_go_walker_uses_each_site_own_alphabet() {
         "{client}"
     );
     // The walker reads the alphabet off the slot rather than naming one.
-    assert!(client.contains("slot.encoding.DecodeString(encoded)"), "{client}");
+    assert!(
+        client.contains("slot.encoding.DecodeString(encoded)"),
+        "{client}"
+    );
     assert!(
         client.contains("slot.encoding.EncodeToString(transformed[index])"),
         "{client}"
     );
-    assert!(!client.contains("base64.StdEncoding.DecodeString"), "{client}");
+    assert!(
+        !client.contains("base64.StdEncoding.DecodeString"),
+        "{client}"
+    );
     fs::remove_dir_all(temp_dir).unwrap();
 }
 
@@ -806,7 +825,6 @@ fn the_python_walker_uses_each_site_own_alphabet() {
     );
     fs::remove_dir_all(temp_dir).unwrap();
 }
-
 
 /// A second file naming the same token type. Go flattens the closure into one
 /// package, so a per-file declaration would be a redeclaration.

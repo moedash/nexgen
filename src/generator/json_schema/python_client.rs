@@ -615,7 +615,6 @@ fn render_long_poll_method(
     output.push_str("                backoff = _LONG_POLL_MIN_BACKOFF\n");
 }
 
-
 /// A docstring with one paragraph per entry. The shared Python docstring writer
 /// takes a single summary plus tagged sections, which is the wrong shape for
 /// prose paragraphs.
