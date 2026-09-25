@@ -1598,6 +1598,9 @@ fn render_external_models(
         .copied()
         .chain(foreign.iter().copied())
         .collect::<Vec<_>>();
+    // Cursor types are not rendered here: Go flattens the closure into one
+    // package, so two input files naming one token type would declare it twice.
+    // `definitions.go` is the file whose census spans the package.
     render_const_discriminators(&mut output, models)?;
     // Declared here: the unions this file's own models define. Known here: those
     // plus the closure's other files', so a `$ref` to a foreign named union
@@ -1700,6 +1703,10 @@ pub(in crate::generator) fn render_definitions_file(
     }
     output.push_str("\t\"go.temporal.io/sdk/temporal\"\n");
     output.push_str(")\n\n");
+    render_cursor_types(
+        &mut output,
+        &crate::json_schema::streaming::cursor_type_names(models.iter().map(|model| &model.schema)),
+    );
     render_validator_core(&mut output);
     if uses_temporal {
         output.push('\n');
@@ -1840,6 +1847,75 @@ fn render_validator_core(output: &mut String) {
 /// the primitive (`type ShowcaseStatus string`) plus one typed constant per
 /// member (`const ShowcaseStatusActive ShowcaseStatus = "active"`). See
 /// `specs/json-schema/features/{const,enum}.md`.
+/// The HTTP caller's plan for one input file in the generate closure.
+///
+/// The models are the whole closure's, name-resolved exactly as
+/// [`ModelBackend::prepare`] resolves them, so a `$ref` crossing input files
+/// still reaches its target and every emitted type name matches the structs.
+pub(in crate::generator) fn client_plan(
+    api_plan: &PlannedSpec,
+    tree_models: &[PlannedJsonType],
+) -> Result<crate::generator::json_schema::client::ClientPlan> {
+    use crate::generator::json_schema::client::{ClientNaming, build_client_plan};
+
+    let manifest = build_json_name_manifest(crate::language::Language::Go, api_plan)?;
+    let mut cross_module_names = BTreeMap::new();
+    register_cross_module_ref_names(api_plan, &mut cross_module_names);
+    let mut models = tree_models.to_vec();
+    for model in &mut models {
+        if let Some(resolved) = manifest.type_name(&model.full_name) {
+            model.model_name = resolved.to_string();
+        } else if let Some(resolved) = cross_module_names.get(&model.full_name) {
+            model.model_name = resolved.clone();
+        }
+    }
+    let resolved_names = models
+        .iter()
+        .map(|model| (model.full_name.clone(), model.model_name.clone()))
+        .collect();
+    Ok(build_client_plan(
+        api_plan,
+        &models,
+        &resolved_names,
+        crate::language::Language::Go,
+        &ClientNaming {
+            service: &|service| {
+                service
+                    .code_name
+                    .for_language(crate::language::Language::Go)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| go_field_name(&service.name))
+            },
+            operation: &|operation| {
+                operation
+                    .code_name
+                    .for_language(crate::language::Language::Go)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| go_field_name(&operation.name))
+            },
+        },
+    ))
+}
+
+/// The opaque token types the contract declares (`x-nexus-cursor`).
+///
+/// A named string type rather than a `string` alias: a caller holding a token in
+/// one of these cannot pass a bare `string` into its place without saying so.
+/// The wire models keep `string`, so the JSON on the wire is unchanged.
+fn render_cursor_types(output: &mut String, cursor_names: &[String]) {
+    for name in cursor_names {
+        output.push('\n');
+        render_wrapped_go_doc_comment(
+            output,
+            "",
+            &crate::json_schema::streaming::cursor_doc(name, " "),
+        );
+        output.push_str("type ");
+        output.push_str(name);
+        output.push_str(" string\n");
+    }
+}
+
 fn render_const_discriminators(output: &mut String, models: &[&PlannedJsonType]) -> Result<()> {
     struct Declared {
         type_name: String,
