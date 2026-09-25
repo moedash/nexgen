@@ -173,6 +173,43 @@ fn generate(
     (temp_dir, read_files(&output_path))
 }
 
+/// Generates two input files into one output, the way a closure of them is
+/// generated, and answers with the emitted files by name.
+fn generate_pair(
+    language: Language,
+    contracts: &[(&str, &str)],
+    client: bool,
+    label: &str,
+) -> (PathBuf, Vec<(String, String)>) {
+    let temp_dir = unique_output_path(label);
+    let input_dir = temp_dir.join("input");
+    fs::create_dir_all(&input_dir).unwrap();
+    let mut input_paths = Vec::new();
+    for (name, contract) in contracts {
+        let input_path = input_dir.join(name);
+        fs::write(&input_path, contract).unwrap();
+        input_paths.push(input_path);
+    }
+    let output_path = temp_dir.join("streams");
+    generate_to_file(&GenerateRequest {
+        config: NexgenConfig {
+            mode: GenerationMode::DefinitionsOnly,
+            client,
+            ..Default::default()
+        },
+        language,
+        input_paths,
+        support_paths: Vec::new(),
+        descriptor_paths: Vec::new(),
+        output_path: output_path.clone(),
+        format: false,
+        java_package_name: None,
+        ts_date_time_types: Default::default(),
+    })
+    .unwrap();
+    (temp_dir, read_files(&output_path))
+}
+
 /// Generates one contract and answers with the loader's refusal, if it made one.
 fn refusal(contract: &str, label: &str) -> String {
     let temp_dir = unique_output_path(label);
@@ -390,13 +427,16 @@ fn python_client_without_annotations_carries_no_codec_or_loop() {
 #[test]
 fn go_declares_the_cursor_type_without_a_client() {
     let (temp_dir, files) = generate(Language::Go, STREAM_CONTRACT, false, "streaming-go-models");
-    let models = file(&files, "streams.go");
-    assert!(models.contains("type StreamCursor string"), "{models}");
+    // Go flattens the closure into one package, so the token type lands in the
+    // file whose census spans it rather than beside each file's models.
+    let definitions = file(&files, "definitions.go");
+    assert!(definitions.contains("type StreamCursor string"), "{definitions}");
     assert!(
-        models.contains("// StreamCursor is an opaque resume token issued by the endpoint."),
-        "{models}"
+        definitions.contains("// StreamCursor is an opaque resume token issued by the endpoint."),
+        "{definitions}"
     );
-    assert_eq!(models.matches("type StreamCursor string").count(), 1);
+    assert_eq!(definitions.matches("type StreamCursor string").count(), 1);
+    assert!(!file(&files, "streams.go").contains("type StreamCursor string"));
     assert!(!has_file(&files, "client.go"));
     fs::remove_dir_all(temp_dir).unwrap();
 }
@@ -738,6 +778,50 @@ fn the_python_walker_uses_each_site_own_alphabet() {
     assert!(
         client.contains("_encode_payload(payload, slot.url_safe)"),
         "{client}"
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+
+/// A second file naming the same token type. Go flattens the closure into one
+/// package, so a per-file declaration would be a redeclaration.
+const SECOND_CURSOR_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  AuditService:
+    fqn: example.audit.v1.AuditService
+    operations:
+      tail:
+        fqn: tail
+        input: { $ref: "#/$defs/TailInput" }
+$defs:
+  TailInput:
+    type: object
+    properties:
+      afterToken: { type: string, x-nexus-cursor: StreamCursor }
+    additionalProperties: false
+"##;
+
+#[test]
+fn two_files_naming_one_token_type_declare_it_once() {
+    let (temp_dir, files) = generate_pair(
+        Language::Go,
+        &[
+            ("streams.nexusrpc.yaml", STREAM_CONTRACT),
+            ("audit.nexusrpc.yaml", SECOND_CURSOR_CONTRACT),
+        ],
+        false,
+        "streaming-go-two-files",
+    );
+    let declarations: usize = files
+        .iter()
+        .map(|(_, contents)| contents.matches("type StreamCursor string").count())
+        .sum();
+    assert_eq!(
+        declarations,
+        1,
+        "one declaration across the flat package; got {:?}",
+        files.iter().map(|(name, _)| name).collect::<Vec<_>>()
     );
     fs::remove_dir_all(temp_dir).unwrap();
 }

@@ -1598,10 +1598,9 @@ fn render_external_models(
         .copied()
         .chain(foreign.iter().copied())
         .collect::<Vec<_>>();
-    render_cursor_types(
-        &mut output,
-        &crate::json_schema::streaming::cursor_type_names(models.iter().map(|model| &model.schema)),
-    );
+    // Cursor types are not rendered here: Go flattens the closure into one
+    // package, so two input files naming one token type would declare it twice.
+    // `definitions.go` is the file whose census spans the package.
     render_const_discriminators(&mut output, models)?;
     // Declared here: the unions this file's own models define. Known here: those
     // plus the closure's other files', so a `$ref` to a foreign named union
@@ -1704,6 +1703,10 @@ pub(in crate::generator) fn render_definitions_file(
     }
     output.push_str("\t\"go.temporal.io/sdk/temporal\"\n");
     output.push_str(")\n\n");
+    render_cursor_types(
+        &mut output,
+        &crate::json_schema::streaming::cursor_type_names(models.iter().map(|model| &model.schema)),
+    );
     render_validator_core(&mut output);
     if uses_temporal {
         output.push('\n');
