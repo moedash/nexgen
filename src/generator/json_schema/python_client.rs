@@ -93,6 +93,9 @@ pub(in crate::generator) fn render_client_module(plan: &ClientPlan) -> Option<St
         render_codec_runtime(&mut output);
     }
     render_post_helper(&mut output);
+    if plan.has_long_poll() {
+        render_long_poll_runtime(&mut output);
+    }
     for service in &plan.services {
         render_payload_site_constants(&mut output, service);
     }
@@ -268,9 +271,70 @@ async def _apply_codec(
     );
 }
 
+fn render_long_poll_runtime(output: &mut String) {
+    output.push_str(
+        r#"_LONG_POLL_MIN_BACKOFF = 0.05
+_LONG_POLL_MAX_BACKOFF = 2.0
+
+
+async def _long_poll_pause(backoff: float, end: float) -> None:
+    """Waits out a backoff without running past the read's own deadline."""
+    remaining = end - time.monotonic()
+    delay = min(backoff, remaining)
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+def _long_poll_next_backoff(backoff: float) -> float:
+    return min(backoff * 2, _LONG_POLL_MAX_BACKOFF)
+
+
+"#,
+    );
+}
+
+fn render_poll_budget_method(output: &mut String) {
+    output.push_str(
+        r#"
+    def _poll_budget(self, remaining: float) -> float:
+        """How long one attempt may ask the endpoint to park, in seconds.
+
+        Asking for longer than the transport will wait is a socket timeout
+        dressed as a long poll, so the ask leaves the answer room to come back
+        inside this client's own timeout.
+        """
+        return max(0.001, min(remaining, self._timeout * 0.9))
+"#,
+    );
+}
+
 fn render_post_helper(output: &mut String) {
     output.push_str(
-        r#"def _post(
+        r#"class HTTPStatusError(RuntimeError):
+    """A non-2xx answer from the ingress.
+
+    It carries the status so a caller can tell a refusal apart from an answer
+    another attempt could still get.
+    """
+
+    def __init__(self, url: str, status: int, detail: str) -> None:
+        super().__init__(f"{url} failed ({status}): {detail}")
+        self.url = url
+        self.status = status
+        self.detail = detail
+
+    @property
+    def retryable(self) -> bool:
+        """Whether the same request could answer differently.
+
+        Too many requests and the server-side failures are the endpoint's own
+        transient conditions; every other status is about this request, and
+        repeating it changes nothing.
+        """
+        return self.status == 429 or self.status >= 500
+
+
+def _post(
     url: str, body: bytes, headers: dict[str, str], timeout: float
 ) -> bytes:
     request = urllib.request.Request(
@@ -284,7 +348,7 @@ fn render_post_helper(output: &mut String) {
             return typing.cast("bytes", response.read())
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")
-        raise RuntimeError(f"{url} failed ({error.code}): {detail}") from error
+        raise HTTPStatusError(url, error.code, detail) from error
 
 
 "#,
@@ -360,6 +424,14 @@ fn render_service_client(output: &mut String, service: &ClientService, codec: bo
     }
     output.push_str("        self._headers: dict[str, str] = dict(headers or {})\n");
     output.push_str("        self._timeout: float = timeout\n");
+
+    if service
+        .operations
+        .iter()
+        .any(|operation| operation.long_poll.is_some())
+    {
+        render_poll_budget_method(output);
+    }
 
     for operation in &service.operations {
         output.push('\n');
@@ -437,7 +509,17 @@ fn render_operation_method(output: &mut String, operation: &ClientOperation) {
     let Some(model_output) = &operation.output else {
         return;
     };
-    output.push_str("        answer: typing.Any = json.loads(raw) if raw else {}\n");
+    // An operation that declares an output and answers with nothing has not
+    // answered. Reading it as the all-defaults value hands a long poll a zero
+    // cursor, which resumes the read from the beginning.
+    output.push_str("        if not raw:\n");
+    output.push_str("            raise ValueError(\n                ");
+    output.push_str(&literal(&format!(
+        "{} answered with an empty body",
+        operation.wire_name
+    )));
+    output.push_str("\n            )\n");
+    output.push_str("        answer: typing.Any = json.loads(raw)\n");
     if !model_output.payload_sites().is_empty() {
         output.push_str("        if self._codec is not None:\n");
         output.push_str("            await _apply_codec(\n");
@@ -493,23 +575,44 @@ fn render_long_poll_method(
         ],
     );
     output.push_str("        end = time.monotonic() + deadline\n");
+    output.push_str("        answer: ");
+    output.push_str(&model_output.type_name);
+    output.push_str(" | None = None\n");
+    output.push_str("        backoff = _LONG_POLL_MIN_BACKOFF\n");
     output.push_str("        while True:\n");
-    output.push_str("            remaining = end - time.monotonic()\n");
+    output.push_str("            wait = self._poll_budget(end - time.monotonic())\n");
     output.push_str("            attempt = dataclasses.replace(\n");
     output.push_str("                request, ");
     output.push_str(&wait_attribute);
-    output.push_str("=max(1, int(remaining * 1000))\n");
+    output.push_str("=int(wait * 1000)\n");
     output.push_str("            )\n");
-    output.push_str("            answer = await self.");
+    output.push_str("            started = time.monotonic()\n");
+    output.push_str("            try:\n");
+    output.push_str("                answer = await self.");
     output.push_str(&operation.name);
     output.push_str("(attempt)\n");
+    output.push_str("            except HTTPStatusError as error:\n");
+    output.push_str(
+        "                if not error.retryable or time.monotonic() >= end:\n                    raise\n",
+    );
+    output.push_str("                await _long_poll_pause(backoff, end)\n");
+    output.push_str("                backoff = _long_poll_next_backoff(backoff)\n");
+    output.push_str("                continue\n");
     output.push_str("            if answer.");
     output.push_str(&result_attribute);
     output.push_str(":\n");
     output.push_str("                return answer\n");
     output.push_str("            if time.monotonic() >= end:\n");
     output.push_str("                return answer\n");
+    // An endpoint that answers empty without parking for the wait it was given
+    // would otherwise be asked again as fast as the network allows.
+    output.push_str("            if time.monotonic() - started < wait / 2:\n");
+    output.push_str("                await _long_poll_pause(backoff, end)\n");
+    output.push_str("                backoff = _long_poll_next_backoff(backoff)\n");
+    output.push_str("            else:\n");
+    output.push_str("                backoff = _LONG_POLL_MIN_BACKOFF\n");
 }
+
 
 /// A docstring with one paragraph per entry. The shared Python docstring writer
 /// takes a single summary plus tagged sections, which is the wrong shape for

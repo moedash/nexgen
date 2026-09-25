@@ -390,16 +390,32 @@ fn python_client_loops_the_long_poll_operation_and_keeps_the_single_shot() {
     let client = file(&files, "client.py");
     assert!(client.contains("async def read_until_records("), "{client}");
     assert!(client.contains("deadline: float,"), "{client}");
-    assert!(
-        client.contains("wait_ms=max(1, int(remaining * 1000))"),
-        "{client}"
-    );
+    assert!(client.contains("wait_ms=int(wait * 1000)"), "{client}");
     assert!(client.contains("if answer.records:"), "{client}");
     // The single-shot call is what the loop drives, and stays callable.
     assert!(
         client.contains("answer = await self.read(attempt)"),
         "{client}"
     );
+    // The ask is clamped to the transport, and an empty answer that came back
+    // faster than the wait it asked for is paced.
+    assert!(
+        client.contains("wait = self._poll_budget(end - time.monotonic())"),
+        "{client}"
+    );
+    assert!(
+        client.contains("min(remaining, self._timeout * 0.9)"),
+        "{client}"
+    );
+    assert!(
+        client.contains("if time.monotonic() - started < wait / 2:"),
+        "{client}"
+    );
+    assert!(
+        client.contains("except HTTPStatusError as error:"),
+        "{client}"
+    );
+    assert!(client.contains("if not error.retryable"), "{client}");
     assert!(client.contains("async def read("), "{client}");
     // `append` declares no long-poll contract, so it gets no loop.
     assert!(!client.contains("append_until"), "{client}");
@@ -515,10 +531,19 @@ fn go_client_loops_the_long_poll_operation_through_a_pointer_wait_hint() {
         "{client}"
     );
     // An optional wait hint is a pointer field, so the attempt takes its address.
-    assert!(client.contains("attempt.WaitMs = &wait"), "{client}");
+    assert!(client.contains("attempt.WaitMs = &milliseconds"), "{client}");
     assert!(client.contains("if len(answer.Records) > 0 {"), "{client}");
     assert!(
-        client.contains("answer, err := c.Read(ctx, attempt)"),
+        client.contains("next, err := c.Read(ctx, attempt)"),
+        "{client}"
+    );
+    // The ask is clamped to the transport, and an empty answer that came back
+    // faster than the wait it asked for is paced.
+    assert!(client.contains("wait := c.pollBudget(time.Until(end))"), "{client}");
+    assert!(client.contains("if time.Since(started) < wait/2 {"), "{client}");
+    assert!(client.contains("backoff = longPollNextBackoff(backoff)"), "{client}");
+    assert!(
+        client.contains("if !errors.As(err, &status) || !status.Retryable()"),
         "{client}"
     );
     assert!(!client.contains("AppendUntil"), "{client}");
@@ -534,8 +559,8 @@ fn go_client_assigns_a_required_wait_hint_by_value() {
         "streaming-go-required-wait",
     );
     let client = file(&files, "client.go");
-    assert!(client.contains("attempt.WaitMs = wait"), "{client}");
-    assert!(!client.contains("attempt.WaitMs = &wait"), "{client}");
+    assert!(client.contains("attempt.WaitMs = milliseconds"), "{client}");
+    assert!(!client.contains("attempt.WaitMs = &milliseconds"), "{client}");
     fs::remove_dir_all(temp_dir).unwrap();
 }
 

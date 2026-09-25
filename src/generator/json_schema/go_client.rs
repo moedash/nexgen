@@ -85,6 +85,10 @@ pub(in crate::generator) fn render_client_file(
     output.push_str(package_name);
     output.push_str("\n\n");
     render_imports(&mut output, plan);
+    render_status_error(&mut output);
+    if plan.has_long_poll() {
+        render_long_poll_runtime(&mut output);
+    }
     if plan.has_payloads() {
         render_codec_runtime(&mut output);
     }
@@ -108,6 +112,9 @@ fn render_imports(output: &mut String, plan: &ClientPlan) {
         output.push_str("\t\"encoding/base64\"\n");
     }
     output.push_str("\t\"encoding/json\"\n");
+    if plan.has_long_poll() {
+        output.push_str("\t\"errors\"\n");
+    }
     output.push_str("\t\"fmt\"\n");
     output.push_str("\t\"io\"\n");
     output.push_str("\t\"net/http\"\n");
@@ -116,6 +123,71 @@ fn render_imports(output: &mut String, plan: &ClientPlan) {
         output.push_str("\t\"time\"\n");
     }
     output.push_str(")\n\n");
+}
+
+fn render_status_error(output: &mut String) {
+    output.push_str(
+        r#"// HTTPStatusError is a non-2xx answer from the ingress. It carries the status
+// so a caller can tell a refusal apart from an answer another attempt could
+// still get.
+type HTTPStatusError struct {
+	URL        string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("%s failed (%d): %s", e.URL, e.StatusCode, e.Body)
+}
+
+// Retryable reports whether the same request could answer differently. Too many
+// requests and the server-side failures are the endpoint's own transient
+// conditions; every other status is about this request, and repeating it
+// changes nothing.
+func (e *HTTPStatusError) Retryable() bool {
+	return e.StatusCode == http.StatusTooManyRequests || e.StatusCode >= 500
+}
+
+"#,
+    );
+}
+
+fn render_long_poll_runtime(output: &mut String) {
+    output.push_str(
+        r#"const (
+	longPollMinBackoff = 50 * time.Millisecond
+	longPollMaxBackoff = 2 * time.Second
+)
+
+// longPollPause waits out a backoff without running past the read's own
+// deadline, and gives up as soon as the context is done.
+func longPollPause(ctx context.Context, backoff time.Duration, end time.Time) error {
+	if remaining := time.Until(end); remaining < backoff {
+		backoff = remaining
+	}
+	if backoff <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func longPollNextBackoff(backoff time.Duration) time.Duration {
+	doubled := backoff * 2
+	if doubled > longPollMaxBackoff {
+		return longPollMaxBackoff
+	}
+	return doubled
+}
+
+"#,
+    );
 }
 
 fn render_codec_runtime(output: &mut String) {
@@ -406,6 +478,13 @@ fn render_service_client(output: &mut String, service: &ClientService, codec: bo
     output.push_str("\t}\n}\n\n");
 
     render_post_method(output, &type_name);
+    if service
+        .operations
+        .iter()
+        .any(|operation| operation.long_poll.is_some())
+    {
+        render_poll_budget_method(output, &type_name);
+    }
 
     for operation in &service.operations {
         render_operation_method(output, &type_name, operation);
@@ -423,6 +502,33 @@ fn render_service_client(output: &mut String, service: &ClientService, codec: bo
             );
         }
     }
+}
+
+fn render_poll_budget_method(output: &mut String, type_name: &str) {
+    output.push_str("func (c *");
+    output.push_str(type_name);
+    output.push_str(
+        r#") pollBudget(remaining time.Duration) time.Duration {
+	if remaining < time.Millisecond {
+		remaining = time.Millisecond
+	}
+	// Asking the endpoint to park for longer than the transport will wait is a
+	// socket timeout dressed as a long poll, so the ask leaves the answer room
+	// to come back inside the client's own deadline.
+	if c.httpClient.Timeout > 0 {
+		budget := c.httpClient.Timeout * 9 / 10
+		if budget < time.Millisecond {
+			budget = time.Millisecond
+		}
+		if remaining > budget {
+			return budget
+		}
+	}
+	return remaining
+}
+
+"#,
+    );
 }
 
 fn render_post_method(output: &mut String, type_name: &str) {
@@ -451,7 +557,7 @@ fn render_post_method(output: &mut String, type_name: &str) {
 		return nil, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s failed (%d): %s", url, response.StatusCode, raw)
+		return nil, &HTTPStatusError{URL: url, StatusCode: response.StatusCode, Body: string(raw)}
 	}
 	return raw, nil
 }
@@ -532,9 +638,16 @@ fn render_operation_method(output: &mut String, type_name: &str, operation: &Cli
         output.push_str("\t_ = raw\n\treturn nil\n}\n\n");
         return;
     };
-    // An operation may answer with an empty body; the models treat that as the
-    // all-defaults value rather than a decode failure.
-    output.push_str("\tif len(raw) == 0 {\n\t\traw = []byte(\"{}\")\n\t}\n");
+    // An operation that declares an output and answers with nothing has not
+    // answered. Reading it as the all-defaults value hands a long poll a zero
+    // cursor, which resumes the read from the beginning.
+    output.push_str("\tif len(raw) == 0 {\n");
+    output.push_str("\t\treturn answer, fmt.Errorf(");
+    output.push_str(&literal(&format!(
+        "{} answered with an empty body",
+        operation.wire_name
+    )));
+    output.push_str(")\n\t}\n");
     if !model_output.payload_sites().is_empty() {
         output.push_str("\tif c.codec != nil {\n");
         output.push_str("\t\traw, err = applyPayloadCodec(ctx, raw, ");
@@ -588,24 +701,46 @@ fn render_long_poll_method(
     output.push_str(&model_output.type_name);
     output.push_str(", error) {\n");
     output.push_str("\tend := time.Now().Add(deadline)\n");
+    output.push_str("\tvar answer ");
+    output.push_str(&model_output.type_name);
+    output.push_str("\n\tbackoff := longPollMinBackoff\n");
     output.push_str("\tfor {\n");
-    output.push_str("\t\twait := time.Until(end).Milliseconds()\n");
-    output.push_str("\t\tif wait < 1 {\n\t\t\twait = 1\n\t\t}\n");
+    output.push_str("\t\twait := c.pollBudget(time.Until(end))\n");
     output.push_str("\t\tattempt := request\n");
+    output.push_str("\t\tmilliseconds := wait.Milliseconds()\n");
     output.push_str("\t\tattempt.");
     output.push_str(&wait_field);
     if wait_required {
-        output.push_str(" = wait\n");
+        output.push_str(" = milliseconds\n");
     } else {
-        output.push_str(" = &wait\n");
+        output.push_str(" = &milliseconds\n");
     }
-    output.push_str("\t\tanswer, err := c.");
+    output.push_str("\t\tstarted := time.Now()\n");
+    output.push_str("\t\tnext, err := c.");
     output.push_str(&operation.name);
     output.push_str("(ctx, attempt)\n");
-    output.push_str("\t\tif err != nil {\n\t\t\treturn answer, err\n\t\t}\n");
+    output.push_str("\t\tif err != nil {\n");
+    output.push_str("\t\t\tvar status *HTTPStatusError\n");
+    output.push_str(
+        "\t\t\tif !errors.As(err, &status) || !status.Retryable() || !time.Now().Before(end) {\n",
+    );
+    output.push_str("\t\t\t\treturn answer, err\n\t\t\t}\n");
+    output.push_str("\t\t\tif paused := longPollPause(ctx, backoff, end); paused != nil {\n");
+    output.push_str("\t\t\t\treturn answer, err\n\t\t\t}\n");
+    output.push_str("\t\t\tbackoff = longPollNextBackoff(backoff)\n");
+    output.push_str("\t\t\tcontinue\n\t\t}\n");
+    output.push_str("\t\tanswer = next\n");
     output.push_str("\t\tif len(answer.");
     output.push_str(&result_field);
     output.push_str(") > 0 {\n\t\t\treturn answer, nil\n\t\t}\n");
     output.push_str("\t\tif !time.Now().Before(end) {\n\t\t\treturn answer, nil\n\t\t}\n");
+    // An endpoint that answers empty without parking for the wait it was given
+    // would otherwise be asked again as fast as the network allows.
+    output.push_str("\t\tif time.Since(started) < wait/2 {\n");
+    output.push_str("\t\t\tif paused := longPollPause(ctx, backoff, end); paused != nil {\n");
+    output.push_str("\t\t\t\treturn answer, nil\n\t\t\t}\n");
+    output.push_str("\t\t\tbackoff = longPollNextBackoff(backoff)\n");
+    output.push_str("\t\t} else {\n\t\t\tbackoff = longPollMinBackoff\n\t\t}\n");
     output.push_str("\t}\n}\n\n");
 }
+
