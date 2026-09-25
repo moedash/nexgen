@@ -53,12 +53,6 @@ func (c *StreamServiceClient) Read(ctx workflow.Context, request ReadInput) work
 	return c.client.ExecuteOperation(ctx, StreamService.Read, request, workflow.NexusOperationOptions{})
 }
 
-// StreamCursor is an opaque resume token issued by the endpoint. The value is never
-// parsed, compared or constructed by a caller; only the endpoint that issued it can
-// interpret it. Pass one back to resume strictly after the record it names, so that
-// record is never delivered twice.
-type StreamCursor string
-
 // AppendInput One append call: who is writing, where, and what.
 type AppendInput struct {
 	// WorkflowID The workflow whose stream is being written.

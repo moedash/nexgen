@@ -30,6 +30,17 @@ every element of the array reached so far.
 """
 
 
+class _PayloadSite(typing.NamedTuple):
+    """One site's step chain and the alphabet its wire string is written in.
+
+    The two base64 alphabets are not interchangeable, so a site carries its own
+    rather than the walker assuming one.
+    """
+
+    steps: _PayloadSteps
+    url_safe: bool
+
+
 @typing.runtime_checkable
 class PayloadCodec(typing.Protocol):
     """Transforms the payload bytes an operation carries.
@@ -47,9 +58,12 @@ class PayloadCodec(typing.Protocol):
 class _Slot(typing.NamedTuple):
     container: typing.Any
     key: typing.Any
+    url_safe: bool
 
 
-def _payload_slots(node: typing.Any, steps: _PayloadSteps) -> list[_Slot]:
+def _payload_slots(
+    node: typing.Any, steps: _PayloadSteps, url_safe: bool
+) -> list[_Slot]:
     if not steps:
         return []
     head, rest = steps[0], steps[1:]
@@ -58,21 +72,36 @@ def _payload_slots(node: typing.Any, steps: _PayloadSteps) -> list[_Slot]:
             return []
         entries = typing.cast("list[typing.Any]", node)
         if not rest:
-            return [_Slot(entries, index) for index in range(len(entries))]
-        return [slot for entry in entries for slot in _payload_slots(entry, rest)]
+            return [_Slot(entries, index, url_safe) for index in range(len(entries))]
+        return [
+            slot for entry in entries for slot in _payload_slots(entry, rest, url_safe)
+        ]
     if not isinstance(node, dict):
         return []
     members = typing.cast("dict[str, typing.Any]", node)
     if head not in members:
         return []
     if not rest:
-        return [_Slot(members, head)]
-    return _payload_slots(members[head], rest)
+        return [_Slot(members, head, url_safe)]
+    return _payload_slots(members[head], rest, url_safe)
+
+
+def _decode_payload(encoded: str, url_safe: bool) -> bytes:
+    if url_safe:
+        # The wire form is unpadded, which `urlsafe_b64decode` will not take.
+        return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    return base64.b64decode(encoded, validate=True)
+
+
+def _encode_payload(payload: bytes, url_safe: bool) -> str:
+    if url_safe:
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return base64.b64encode(payload).decode("ascii")
 
 
 async def _apply_codec(
     wire: typing.Any,
-    sites: tuple[_PayloadSteps, ...],
+    sites: tuple[_PayloadSite, ...],
     transform: collections.abc.Callable[
         [list[bytes]], collections.abc.Awaitable[list[bytes]]
     ],
@@ -80,10 +109,15 @@ async def _apply_codec(
     """Runs every payload the sites reach through the codec, in one call.
 
     The codec sees one list per request, so whatever it does (a key fetch, a
-    round trip) is paid once for the whole batch. The wire form is base64, so the
-    bytes handed over are the decoded ones.
+    round trip) is paid once for the whole batch. Each site is decoded and
+    re-encoded in its own alphabet, so a member the contract wrote as base64url
+    goes back on the wire as base64url.
     """
-    slots = [slot for site in sites for slot in _payload_slots(wire, site)]
+    slots = [
+        slot
+        for site in sites
+        for slot in _payload_slots(wire, site.steps, site.url_safe)
+    ]
     if not slots:
         return
     payloads: list[bytes] = []
@@ -91,14 +125,38 @@ async def _apply_codec(
         encoded = slot.container[slot.key]
         if not isinstance(encoded, str):
             raise ValueError(f"payload at {slot.key!r} is not a base64 string")
-        payloads.append(base64.b64decode(encoded, validate=True))
+        payloads.append(_decode_payload(encoded, slot.url_safe))
     transformed = await transform(payloads)
     if len(transformed) != len(payloads):
         raise ValueError(
             f"codec answered with {len(transformed)} payloads for {len(payloads)}"
         )
     for slot, payload in zip(slots, transformed):
-        slot.container[slot.key] = base64.b64encode(payload).decode("ascii")
+        slot.container[slot.key] = _encode_payload(payload, slot.url_safe)
+
+
+class HTTPStatusError(RuntimeError):
+    """A non-2xx answer from the ingress.
+
+    It carries the status so a caller can tell a refusal apart from an answer
+    another attempt could still get.
+    """
+
+    def __init__(self, url: str, status: int, detail: str) -> None:
+        super().__init__(f"{url} failed ({status}): {detail}")
+        self.url = url
+        self.status = status
+        self.detail = detail
+
+    @property
+    def retryable(self) -> bool:
+        """Whether the same request could answer differently.
+
+        Too many requests and the server-side failures are the endpoint's own
+        transient conditions; every other status is about this request, and
+        repeating it changes nothing.
+        """
+        return self.status == 429 or self.status >= 500
 
 
 def _post(url: str, body: bytes, headers: dict[str, str], timeout: float) -> bytes:
@@ -113,22 +171,44 @@ def _post(url: str, body: bytes, headers: dict[str, str], timeout: float) -> byt
             return typing.cast("bytes", response.read())
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")
-        raise RuntimeError(f"{url} failed ({error.code}): {detail}") from error
+        raise HTTPStatusError(url, error.code, detail) from error
 
 
-_APPEND_INPUT_PAYLOAD_SITES: tuple[_PayloadSteps, ...] = (
-    (
-        "payloads",
-        None,
+_LONG_POLL_MIN_BACKOFF = 0.05
+_LONG_POLL_MAX_BACKOFF = 2.0
+
+
+async def _long_poll_pause(backoff: float, end: float) -> None:
+    """Waits out a backoff without running past the read's own deadline."""
+    remaining = end - time.monotonic()
+    delay = min(backoff, remaining)
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+def _long_poll_next_backoff(backoff: float) -> float:
+    return min(backoff * 2, _LONG_POLL_MAX_BACKOFF)
+
+
+_APPEND_INPUT_PAYLOAD_SITES: tuple[_PayloadSite, ...] = (
+    _PayloadSite(
+        (
+            "payloads",
+            None,
+        ),
+        False,
     ),
 )
 
 
-_READ_OUTPUT_PAYLOAD_SITES: tuple[_PayloadSteps, ...] = (
-    (
-        "records",
-        None,
-        "frame",
+_READ_OUTPUT_PAYLOAD_SITES: tuple[_PayloadSite, ...] = (
+    _PayloadSite(
+        (
+            "records",
+            None,
+            "frame",
+        ),
+        False,
     ),
 )
 
@@ -155,6 +235,15 @@ class StreamServiceHttpClient:
         self._headers: dict[str, str] = dict(headers or {})
         self._timeout: float = timeout
 
+    def _poll_budget(self, remaining: float) -> float:
+        """How long one attempt may ask the endpoint to park, in seconds.
+
+        Asking for longer than the transport will wait is a socket timeout
+        dressed as a long poll, so the ask leaves the answer room to come back
+        inside this client's own timeout.
+        """
+        return max(0.001, min(remaining, self._timeout * 0.9))
+
     async def append(
         self,
         request: AppendInput,
@@ -173,7 +262,9 @@ class StreamServiceHttpClient:
             self._headers,
             self._timeout,
         )
-        answer: typing.Any = json.loads(raw) if raw else {}
+        if not raw:
+            raise ValueError("append answered with an empty body")
+        answer: typing.Any = json.loads(raw)
         return _AppendOutputTransferTypeConverter().from_transfer_type(
             answer, AppendOutput
         )
@@ -195,7 +286,9 @@ class StreamServiceHttpClient:
             self._headers,
             self._timeout,
         )
-        answer: typing.Any = json.loads(raw) if raw else {}
+        if not raw:
+            raise ValueError("read answered with an empty body")
+        answer: typing.Any = json.loads(raw)
         if self._codec is not None:
             await _apply_codec(answer, _READ_OUTPUT_PAYLOAD_SITES, self._codec.decode)
         return _ReadOutputTransferTypeConverter().from_transfer_type(answer, ReadOutput)
@@ -217,13 +310,26 @@ class StreamServiceHttpClient:
         available for a caller that wants one attempt.
         """
         end = time.monotonic() + deadline
+        answer: ReadOutput | None = None
+        backoff = _LONG_POLL_MIN_BACKOFF
         while True:
-            remaining = end - time.monotonic()
-            attempt = dataclasses.replace(
-                request, wait_ms=max(1, int(remaining * 1000))
-            )
-            answer = await self.read(attempt)
+            wait = self._poll_budget(end - time.monotonic())
+            attempt = dataclasses.replace(request, wait_ms=int(wait * 1000))
+            started = time.monotonic()
+            try:
+                answer = await self.read(attempt)
+            except HTTPStatusError as error:
+                if not error.retryable or time.monotonic() >= end:
+                    raise
+                await _long_poll_pause(backoff, end)
+                backoff = _long_poll_next_backoff(backoff)
+                continue
             if answer.records:
                 return answer
             if time.monotonic() >= end:
                 return answer
+            if time.monotonic() - started < wait / 2:
+                await _long_poll_pause(backoff, end)
+                backoff = _long_poll_next_backoff(backoff)
+            else:
+                backoff = _LONG_POLL_MIN_BACKOFF

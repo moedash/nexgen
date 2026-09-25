@@ -7,12 +7,66 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// HTTPStatusError is a non-2xx answer from the ingress. It carries the status
+// so a caller can tell a refusal apart from an answer another attempt could
+// still get.
+type HTTPStatusError struct {
+	URL        string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("%s failed (%d): %s", e.URL, e.StatusCode, e.Body)
+}
+
+// Retryable reports whether the same request could answer differently. Too many
+// requests and the server-side failures are the endpoint's own transient
+// conditions; every other status is about this request, and repeating it
+// changes nothing.
+func (e *HTTPStatusError) Retryable() bool {
+	return e.StatusCode == http.StatusTooManyRequests || e.StatusCode >= 500
+}
+
+const (
+	longPollMinBackoff = 50 * time.Millisecond
+	longPollMaxBackoff = 2 * time.Second
+)
+
+// longPollPause waits out a backoff without running past the read's own
+// deadline, and gives up as soon as the context is done.
+func longPollPause(ctx context.Context, backoff time.Duration, end time.Time) error {
+	if remaining := time.Until(end); remaining < backoff {
+		backoff = remaining
+	}
+	if backoff <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func longPollNextBackoff(backoff time.Duration) time.Duration {
+	doubled := backoff * 2
+	if doubled > longPollMaxBackoff {
+		return longPollMaxBackoff
+	}
+	return doubled
+}
 
 // PayloadCodec transforms the payload bytes an operation carries. A caller
 // applies it before the send and after the receive, so a payload never travels
@@ -30,13 +84,22 @@ type payloadStep struct {
 	each   bool
 }
 
+// payloadSite is one site's step chain together with the alphabet its wire
+// string is written in. The two base64 alphabets are not interchangeable, so a
+// site carries its own rather than the walker assuming one.
+type payloadSite struct {
+	steps    []payloadStep
+	encoding *base64.Encoding
+}
+
 // payloadSlot is a place in the decoded request or response body holding one
 // payload, addressed so it can be read and written back.
 type payloadSlot struct {
-	object map[string]any
-	key    string
-	array  []any
-	index  int
+	object   map[string]any
+	key      string
+	array    []any
+	index    int
+	encoding *base64.Encoding
 }
 
 func (s payloadSlot) get() any {
@@ -54,7 +117,9 @@ func (s payloadSlot) set(value any) {
 	s.array[s.index] = value
 }
 
-func collectPayloadSlots(node any, steps []payloadStep, out *[]payloadSlot) {
+func collectPayloadSlots(
+	node any, steps []payloadStep, encoding *base64.Encoding, out *[]payloadSlot,
+) {
 	if len(steps) == 0 {
 		return
 	}
@@ -66,10 +131,10 @@ func collectPayloadSlots(node any, steps []payloadStep, out *[]payloadSlot) {
 		}
 		for index := range entries {
 			if len(rest) == 0 {
-				*out = append(*out, payloadSlot{array: entries, index: index})
+				*out = append(*out, payloadSlot{array: entries, index: index, encoding: encoding})
 				continue
 			}
-			collectPayloadSlots(entries[index], rest, out)
+			collectPayloadSlots(entries[index], rest, encoding, out)
 		}
 		return
 	}
@@ -81,24 +146,25 @@ func collectPayloadSlots(node any, steps []payloadStep, out *[]payloadSlot) {
 		return
 	}
 	if len(rest) == 0 {
-		*out = append(*out, payloadSlot{object: members, key: head.member})
+		*out = append(*out, payloadSlot{object: members, key: head.member, encoding: encoding})
 		return
 	}
-	collectPayloadSlots(members[head.member], rest, out)
+	collectPayloadSlots(members[head.member], rest, encoding, out)
 }
 
 // applyPayloadCodec runs every payload the sites reach through transform, in one
 // call, and answers with the rewritten body.
 //
 // The codec sees one slice per request, so whatever it does (a key fetch, a
-// round trip) is paid once for the whole batch. The wire form is base64, so the
-// bytes handed over are the decoded ones. A body whose sites reach nothing is
+// round trip) is paid once for the whole batch. Each site is decoded and
+// re-encoded in its own alphabet, so a member the contract wrote as base64url
+// goes back on the wire as base64url. A body whose sites reach nothing is
 // returned untouched, so an operation that happens to carry no payload costs
 // nothing beyond the walk.
 func applyPayloadCodec(
 	ctx context.Context,
 	body []byte,
-	sites [][]payloadStep,
+	sites []payloadSite,
 	transform func(context.Context, [][]byte) ([][]byte, error),
 ) ([]byte, error) {
 	var node any
@@ -107,7 +173,7 @@ func applyPayloadCodec(
 	}
 	var slots []payloadSlot
 	for _, site := range sites {
-		collectPayloadSlots(node, site, &slots)
+		collectPayloadSlots(node, site.steps, site.encoding, &slots)
 	}
 	if len(slots) == 0 {
 		return body, nil
@@ -118,7 +184,7 @@ func applyPayloadCodec(
 		if !ok {
 			return nil, fmt.Errorf("payload at %q is not a base64 string", slot.key)
 		}
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		decoded, err := slot.encoding.DecodeString(encoded)
 		if err != nil {
 			return nil, fmt.Errorf("decode payload at %q: %w", slot.key, err)
 		}
@@ -134,7 +200,7 @@ func applyPayloadCodec(
 		)
 	}
 	for index, slot := range slots {
-		slot.set(base64.StdEncoding.EncodeToString(transformed[index]))
+		slot.set(slot.encoding.EncodeToString(transformed[index]))
 	}
 	rewritten, err := json.Marshal(node)
 	if err != nil {
@@ -144,13 +210,13 @@ func applyPayloadCodec(
 }
 
 // appendInputPayloadSites addresses every payload the codec owns inside a AppendInput.
-var appendInputPayloadSites = [][]payloadStep{
-	{{member: "payloads"}, {each: true}},
+var appendInputPayloadSites = []payloadSite{
+	{steps: []payloadStep{{member: "payloads"}, {each: true}}, encoding: base64.StdEncoding},
 }
 
 // readOutputPayloadSites addresses every payload the codec owns inside a ReadOutput.
-var readOutputPayloadSites = [][]payloadStep{
-	{{member: "records"}, {each: true}, {member: "frame"}},
+var readOutputPayloadSites = []payloadSite{
+	{steps: []payloadStep{{member: "records"}, {each: true}, {member: "frame"}}, encoding: base64.StdEncoding},
 }
 
 // StreamServiceHTTPClient is an HTTP caller for the example.streams.v1.StreamService
@@ -218,9 +284,28 @@ func (c *StreamServiceHTTPClient) post(ctx context.Context, operation string, bo
 		return nil, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s failed (%d): %s", url, response.StatusCode, raw)
+		return nil, &HTTPStatusError{URL: url, StatusCode: response.StatusCode, Body: string(raw)}
 	}
 	return raw, nil
+}
+
+func (c *StreamServiceHTTPClient) pollBudget(remaining time.Duration) time.Duration {
+	if remaining < time.Millisecond {
+		remaining = time.Millisecond
+	}
+	// Asking the endpoint to park for longer than the transport will wait is a
+	// socket timeout dressed as a long poll, so the ask leaves the answer room
+	// to come back inside the client's own deadline.
+	if c.httpClient.Timeout > 0 {
+		budget := c.httpClient.Timeout * 9 / 10
+		if budget < time.Millisecond {
+			budget = time.Millisecond
+		}
+		if remaining > budget {
+			return budget
+		}
+	}
+	return remaining
 }
 
 // Append posts one append call. Append one batch of records. A repeated batchIndex for
@@ -242,7 +327,7 @@ func (c *StreamServiceHTTPClient) Append(ctx context.Context, request AppendInpu
 		return answer, err
 	}
 	if len(raw) == 0 {
-		raw = []byte("{}")
+		return answer, fmt.Errorf("append answered with an empty body")
 	}
 	if err := json.Unmarshal(raw, &answer); err != nil {
 		return answer, err
@@ -264,7 +349,7 @@ func (c *StreamServiceHTTPClient) Read(ctx context.Context, request ReadInput) (
 		return answer, err
 	}
 	if len(raw) == 0 {
-		raw = []byte("{}")
+		return answer, fmt.Errorf("read answered with an empty body")
 	}
 	if c.codec != nil {
 		raw, err = applyPayloadCodec(ctx, raw, readOutputPayloadSites, c.codec.Decode)
@@ -286,22 +371,40 @@ func (c *StreamServiceHTTPClient) Read(ctx context.Context, request ReadInput) (
 // caller that wants one attempt.
 func (c *StreamServiceHTTPClient) ReadUntilRecords(ctx context.Context, request ReadInput, deadline time.Duration) (ReadOutput, error) {
 	end := time.Now().Add(deadline)
+	var answer ReadOutput
+	backoff := longPollMinBackoff
 	for {
-		wait := time.Until(end).Milliseconds()
-		if wait < 1 {
-			wait = 1
-		}
+		wait := c.pollBudget(time.Until(end))
 		attempt := request
-		attempt.WaitMs = &wait
-		answer, err := c.Read(ctx, attempt)
+		milliseconds := wait.Milliseconds()
+		attempt.WaitMs = &milliseconds
+		started := time.Now()
+		next, err := c.Read(ctx, attempt)
 		if err != nil {
-			return answer, err
+			var status *HTTPStatusError
+			if !errors.As(err, &status) || !status.Retryable() || !time.Now().Before(end) {
+				return answer, err
+			}
+			if paused := longPollPause(ctx, backoff, end); paused != nil {
+				return answer, err
+			}
+			backoff = longPollNextBackoff(backoff)
+			continue
 		}
+		answer = next
 		if len(answer.Records) > 0 {
 			return answer, nil
 		}
 		if !time.Now().Before(end) {
 			return answer, nil
+		}
+		if time.Since(started) < wait/2 {
+			if paused := longPollPause(ctx, backoff, end); paused != nil {
+				return answer, nil
+			}
+			backoff = longPollNextBackoff(backoff)
+		} else {
+			backoff = longPollMinBackoff
 		}
 	}
 }

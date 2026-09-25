@@ -16,6 +16,12 @@ import (
 	"strings"
 )
 
+// StreamCursor is an opaque resume token issued by the endpoint. The value is never
+// parsed, compared or constructed by a caller; only the endpoint that issued it can
+// interpret it. Pass one back to resume strictly after the record it names, so that
+// record is never delivered twice.
+type StreamCursor string
+
 // Violation is a single constraint failure. Path is the JSON member path
 // (dot segments for identifiers and escaped bracket segments otherwise);
 // Reason is a human-readable message.
