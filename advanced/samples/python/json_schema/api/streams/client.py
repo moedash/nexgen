@@ -144,9 +144,11 @@ class HTTPStatusError(RuntimeError):
 
     def __init__(self, url: str, status: int, detail: str) -> None:
         super().__init__(f"{url} failed ({status}): {detail}")
-        self.url = url
-        self.status = status
-        self.detail = detail
+        # Annotated explicitly: a target's strict type checker asks for it on a
+        # class it cannot prove closed.
+        self.url: str = url
+        self.status: int = status
+        self.detail: str = detail
 
     @property
     def retryable(self) -> bool:
