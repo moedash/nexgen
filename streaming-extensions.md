@@ -14,8 +14,8 @@ in the wrapper is the requirements list below.
 
 | Keyword | Position | Value |
 |---|---|---|
-| `x-nexus-cursor` | a `type: string` node | the emitted token type's name |
-| `x-nexus-payload` | a bytes node, or an array of them | `true` |
+| `x-nexus-cursor` | a model's direct `type: string` property | the emitted token type's name |
+| `x-nexus-payload` | a bytes node the walk can address, or an array of them | `true` |
 | `x-nexus-long-poll` | an `operations:` entry | `{wait-field, result-field}` |
 | `x-nexus-handle` | a `services:` entry | emitted handle type names to their key member lists |
 
@@ -72,7 +72,10 @@ exported, so it is available with or without a generated caller. The other
 three targets ignore the keyword.
 
 **The wire models do not move.** A cursor member stays `str` / `*string`.
-See open question 1.
+See open question 1. Because the emitted type is referenced by nothing but its
+own doc comment today, the keyword is admitted on a model's direct property
+only: anywhere else it declared a type and registered no member, which read as
+two behaviours by position.
 
 **HTTP callers, behind a new `--client` flag on the `go` and `python`
 subcommands.** One `{Service}HttpClient` / `{Service}HTTPClient` per
@@ -148,13 +151,27 @@ The rules:
   generated method drops those members from its signature and injects the
   bound values; the rest of the signature stays. An operation missing a key
   member stays off that handle.
+- Membership is not exclusive. An operation whose input carries the key
+  members of two handles joins both, and its method is emitted on both. There
+  is no "which handle wins": an `append` that carries the producer keys is
+  reachable from a `StreamHandle` with the rest of its arguments spelled out,
+  and from a `StreamProducer` with them bound. Two handles declaring the same
+  key set are a contract error, because they would emit the same projection
+  twice under two names.
 - A handle whose key set extends another's is constructible from it, so
   `handle.producer(topic, producer_id, attempt)` falls out of the key sets
   rather than being declared.
 - A key member that is optional on the wire may be bound absent, and the
-  handle sends what it holds. Binding is construction-time only; a handle
-  carries no other state, so the endpoint stays as stateless as the flat
-  calls leave it.
+  handle sends what it holds. Absent is a bound value, not an unbound key: a
+  handle that binds `run_id` absent is a different handle from one that binds
+  it, and both are the same handle *type*. Membership is decided on the key
+  names the input declares, so an optional key member counts as carried
+  whether or not any particular call fills it. Binding is construction-time
+  only; a handle carries no other state, so the endpoint stays as stateless as
+  the flat calls leave it.
+- Handle names land in the emitted-model namespace, beside the model names and
+  the cursor type names, and take whatever collision check that namespace
+  grows. Today it has none, which is the last bullet under "What is not done".
 - The flat client stays emitted, and handles are a projection over it:
   nothing about the wire, the handler, or a caller that ignores the keyword
   changes. A long-poll loop method appears on the handle like any other
@@ -168,7 +185,7 @@ touch.
 
 ## Open questions
 
-**1. Should the wire model's member carry the cursor type?**
+**1. Should the wire model's member carry the cursor type?** Still open.
 Today it does not: a cursor member stays `str` in Python and `*string` in
 Go, and the token type is for the caller's own variables. Typing the member
 is the stronger guarantee, but it costs a `typing.cast` on every assignment
@@ -212,6 +229,10 @@ the Python backend do the same, or should a caller keep reaching inside?
   `from <package>.client import ...`.
 - The looping method's name is derived, so a contract with an operation
   already called `read_until_records` would collide. Nothing checks that.
+- The emitted loop retries a 429 or a 5xx with a bounded backoff and paces an
+  endpoint that answers empty faster than the wait it was given. It does not
+  retry a transport error, which is the case a caller's own client settings
+  already cover.
 - `x-nexus-handle` is specified above and not implemented; nothing parses
   or emits it yet.
 - The cursor type name is not checked against the model names it shares a
