@@ -14,6 +14,7 @@ use crate::generator::json_schema::client::{
 };
 use crate::generator::json_schema::python::converter_class_name;
 use crate::generator::python::{python_field_name, render_generated_file_header};
+use crate::json_schema::content_encoding::Encoding;
 use crate::json_schema::streaming::PayloadStep;
 
 /// The file the caller is emitted to, next to the models it uses.
@@ -158,6 +159,17 @@ every element of the array reached so far.
 """
 
 
+class _PayloadSite(typing.NamedTuple):
+    """One site's step chain and the alphabet its wire string is written in.
+
+    The two base64 alphabets are not interchangeable, so a site carries its own
+    rather than the walker assuming one.
+    """
+
+    steps: _PayloadSteps
+    url_safe: bool
+
+
 @typing.runtime_checkable
 class PayloadCodec(typing.Protocol):
     """Transforms the payload bytes an operation carries.
@@ -175,9 +187,12 @@ class PayloadCodec(typing.Protocol):
 class _Slot(typing.NamedTuple):
     container: typing.Any
     key: typing.Any
+    url_safe: bool
 
 
-def _payload_slots(node: typing.Any, steps: _PayloadSteps) -> list[_Slot]:
+def _payload_slots(
+    node: typing.Any, steps: _PayloadSteps, url_safe: bool
+) -> list[_Slot]:
     if not steps:
         return []
     head, rest = steps[0], steps[1:]
@@ -186,21 +201,36 @@ def _payload_slots(node: typing.Any, steps: _PayloadSteps) -> list[_Slot]:
             return []
         entries = typing.cast("list[typing.Any]", node)
         if not rest:
-            return [_Slot(entries, index) for index in range(len(entries))]
-        return [slot for entry in entries for slot in _payload_slots(entry, rest)]
+            return [_Slot(entries, index, url_safe) for index in range(len(entries))]
+        return [
+            slot for entry in entries for slot in _payload_slots(entry, rest, url_safe)
+        ]
     if not isinstance(node, dict):
         return []
     members = typing.cast("dict[str, typing.Any]", node)
     if head not in members:
         return []
     if not rest:
-        return [_Slot(members, head)]
-    return _payload_slots(members[head], rest)
+        return [_Slot(members, head, url_safe)]
+    return _payload_slots(members[head], rest, url_safe)
+
+
+def _decode_payload(encoded: str, url_safe: bool) -> bytes:
+    if url_safe:
+        # The wire form is unpadded, which `urlsafe_b64decode` will not take.
+        return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    return base64.b64decode(encoded, validate=True)
+
+
+def _encode_payload(payload: bytes, url_safe: bool) -> str:
+    if url_safe:
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return base64.b64encode(payload).decode("ascii")
 
 
 async def _apply_codec(
     wire: typing.Any,
-    sites: tuple[_PayloadSteps, ...],
+    sites: tuple[_PayloadSite, ...],
     transform: collections.abc.Callable[
         [list[bytes]], collections.abc.Awaitable[list[bytes]]
     ],
@@ -208,10 +238,15 @@ async def _apply_codec(
     """Runs every payload the sites reach through the codec, in one call.
 
     The codec sees one list per request, so whatever it does (a key fetch, a
-    round trip) is paid once for the whole batch. The wire form is base64, so the
-    bytes handed over are the decoded ones.
+    round trip) is paid once for the whole batch. Each site is decoded and
+    re-encoded in its own alphabet, so a member the contract wrote as base64url
+    goes back on the wire as base64url.
     """
-    slots = [slot for site in sites for slot in _payload_slots(wire, site)]
+    slots = [
+        slot
+        for site in sites
+        for slot in _payload_slots(wire, site.steps, site.url_safe)
+    ]
     if not slots:
         return
     payloads: list[bytes] = []
@@ -219,14 +254,14 @@ async def _apply_codec(
         encoded = slot.container[slot.key]
         if not isinstance(encoded, str):
             raise ValueError(f"payload at {slot.key!r} is not a base64 string")
-        payloads.append(base64.b64decode(encoded, validate=True))
+        payloads.append(_decode_payload(encoded, slot.url_safe))
     transformed = await transform(payloads)
     if len(transformed) != len(payloads):
         raise ValueError(
             f"codec answered with {len(transformed)} payloads for {len(payloads)}"
         )
     for slot, payload in zip(slots, transformed):
-        slot.container[slot.key] = base64.b64encode(payload).decode("ascii")
+        slot.container[slot.key] = _encode_payload(payload, slot.url_safe)
 
 
 "#,
@@ -271,11 +306,16 @@ fn render_payload_site_constants(output: &mut String, service: &ClientService) {
                 continue;
             }
             output.push_str(&name);
-            output.push_str(": tuple[_PayloadSteps, ...] = (\n");
+            output.push_str(": tuple[_PayloadSite, ...] = (\n");
             for site in model.payload_sites() {
-                output.push_str("    ");
+                output.push_str("    _PayloadSite(");
                 render_payload_steps(output, &site.steps);
-                output.push_str(",\n");
+                output.push_str(", ");
+                output.push_str(match site.encoding {
+                    Encoding::Base64 => "False",
+                    Encoding::Base64Url => "True",
+                });
+                output.push_str("),\n");
             }
             output.push_str(")\n\n\n");
         }

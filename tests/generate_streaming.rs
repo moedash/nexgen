@@ -173,6 +173,36 @@ fn generate(
     (temp_dir, read_files(&output_path))
 }
 
+/// Generates one contract and answers with the loader's refusal, if it made one.
+fn refusal(contract: &str, label: &str) -> String {
+    let temp_dir = unique_output_path(label);
+    let input_dir = temp_dir.join("input");
+    fs::create_dir_all(&input_dir).unwrap();
+    let input_path = input_dir.join("streams.nexusrpc.yaml");
+    fs::write(&input_path, contract).unwrap();
+    let outcome = generate_to_file(&GenerateRequest {
+        config: NexgenConfig {
+            mode: GenerationMode::DefinitionsOnly,
+            client: true,
+            ..Default::default()
+        },
+        language: Language::Go,
+        input_paths: vec![input_path],
+        support_paths: Vec::new(),
+        descriptor_paths: Vec::new(),
+        output_path: temp_dir.join("streams"),
+        format: false,
+        java_package_name: None,
+        ts_date_time_types: Default::default(),
+    });
+    let message = match outcome {
+        Ok(()) => panic!("the loader accepted a contract it cannot lower"),
+        Err(error) => error.to_string(),
+    };
+    fs::remove_dir_all(&temp_dir).ok();
+    message
+}
+
 fn read_files(root: &Path) -> Vec<(String, String)> {
     let mut files = Vec::new();
     for entry in fs::read_dir(root).unwrap() {
@@ -261,12 +291,14 @@ fn python_client_applies_the_codec_on_the_marked_members_only() {
     );
     let client = file(&files, "client.py");
     assert!(
-        client.contains("_APPEND_INPUT_PAYLOAD_SITES: tuple[_PayloadSteps, ...] = (\n    (\"payloads\", None,),\n)"),
+        client.contains(
+            "_APPEND_INPUT_PAYLOAD_SITES: tuple[_PayloadSite, ...] = (\n    _PayloadSite((\"payloads\", None,), False),\n)"
+        ),
         "{client}"
     );
     assert!(
         client.contains(
-            "_READ_OUTPUT_PAYLOAD_SITES: tuple[_PayloadSteps, ...] = (\n    (\"records\", None, \"frame\",),\n)"
+            "_READ_OUTPUT_PAYLOAD_SITES: tuple[_PayloadSite, ...] = (\n    _PayloadSite((\"records\", None, \"frame\",), False),\n)"
         ),
         "{client}"
     );
@@ -386,13 +418,13 @@ fn go_client_applies_the_codec_on_the_marked_members_only() {
     let client = file(&files, "client.go");
     assert!(
         client.contains(
-            "var appendInputPayloadSites = [][]payloadStep{\n\t{{member: \"payloads\"}, {each: true}},\n}"
+            "var appendInputPayloadSites = []payloadSite{\n\t{steps: []payloadStep{{member: \"payloads\"}, {each: true}}, encoding: base64.StdEncoding},\n}"
         ),
         "{client}"
     );
     assert!(
         client.contains(
-            "var readOutputPayloadSites = [][]payloadStep{\n\t{{member: \"records\"}, {each: true}, {member: \"frame\"}},\n}"
+            "var readOutputPayloadSites = []payloadSite{\n\t{steps: []payloadStep{{member: \"records\"}, {each: true}, {member: \"frame\"}}, encoding: base64.StdEncoding},\n}"
         ),
         "{client}"
     );
@@ -515,4 +547,197 @@ fn the_other_targets_ignore_the_streaming_annotations() {
         }
         fs::remove_dir_all(temp_dir).unwrap();
     }
+}
+
+
+/// A long-poll operation whose output is a map, which has no member to name.
+const MAP_OUTPUT_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    fqn: example.streams.v1.StreamService
+    operations:
+      read:
+        fqn: read
+        x-nexus-long-poll:
+          wait-field: waitMs
+          result-field: records
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      waitMs: { type: integer }
+    required: [waitMs]
+    additionalProperties: false
+  ReadOutput:
+    type: object
+    additionalProperties: { type: string }
+"##;
+
+/// A payload marked on a map's value schema, which the site walk never reaches.
+const UNREACHABLE_PAYLOAD_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    fqn: example.streams.v1.StreamService
+    operations:
+      append:
+        fqn: append
+        input: { $ref: "#/$defs/AppendInput" }
+$defs:
+  AppendInput:
+    type: object
+    additionalProperties:
+      type: string
+      contentEncoding: base64
+      x-nexus-payload: true
+"##;
+
+/// A cursor on an array element, which is a position the model's own facts
+/// never report: an inline object is hoisted into a model of its own and keeps
+/// its direct properties, but an element schema has no member to be.
+const NESTED_CURSOR_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    fqn: example.streams.v1.StreamService
+    operations:
+      read:
+        fqn: read
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      tokens:
+        type: array
+        items: { type: string, x-nexus-cursor: PageCursor }
+    additionalProperties: false
+"##;
+
+/// One payload on each alphabet, so a walker that assumes one is caught.
+const MIXED_ENCODING_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    fqn: example.streams.v1.StreamService
+    operations:
+      append:
+        fqn: append
+        input: { $ref: "#/$defs/AppendInput" }
+        output: { $ref: "#/$defs/AppendOutput" }
+$defs:
+  AppendInput:
+    type: object
+    properties:
+      padded: { type: string, contentEncoding: base64, x-nexus-payload: true }
+      urlsafe: { type: string, contentEncoding: base64url, x-nexus-payload: true }
+    additionalProperties: false
+  AppendOutput:
+    type: object
+    properties:
+      echoed: { type: string, contentEncoding: base64url, x-nexus-payload: true }
+    additionalProperties: false
+"##;
+
+#[test]
+fn a_long_poll_needs_a_properties_shaped_model() {
+    let message = refusal(MAP_OUTPUT_CONTRACT, "streaming-map-output");
+    assert!(
+        message.contains("requires a `properties`-shaped output model"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_payload_the_walk_cannot_reach_is_refused() {
+    let message = refusal(UNREACHABLE_PAYLOAD_CONTRACT, "streaming-unreachable");
+    assert!(
+        message.contains("additionalProperties: `x-nexus-payload`"),
+        "{message}"
+    );
+    assert!(
+        message.contains("cannot address it"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_cursor_off_a_direct_property_is_refused() {
+    let message = refusal(NESTED_CURSOR_CONTRACT, "streaming-nested-cursor");
+    assert!(
+        message.contains("properties.tokens.items: `x-nexus-cursor`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_go_walker_uses_each_site_own_alphabet() {
+    let (temp_dir, files) = generate(
+        Language::Go,
+        MIXED_ENCODING_CONTRACT,
+        true,
+        "streaming-go-alphabets",
+    );
+    let client = file(&files, "client.go");
+    assert!(
+        client.contains(
+            "{steps: []payloadStep{{member: \"padded\"}}, encoding: base64.StdEncoding}"
+        ),
+        "{client}"
+    );
+    assert!(
+        client.contains(
+            "{steps: []payloadStep{{member: \"urlsafe\"}}, encoding: base64.RawURLEncoding}"
+        ),
+        "{client}"
+    );
+    assert!(
+        client.contains(
+            "{steps: []payloadStep{{member: \"echoed\"}}, encoding: base64.RawURLEncoding}"
+        ),
+        "{client}"
+    );
+    // The walker reads the alphabet off the slot rather than naming one.
+    assert!(client.contains("slot.encoding.DecodeString(encoded)"), "{client}");
+    assert!(
+        client.contains("slot.encoding.EncodeToString(transformed[index])"),
+        "{client}"
+    );
+    assert!(!client.contains("base64.StdEncoding.DecodeString"), "{client}");
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn the_python_walker_uses_each_site_own_alphabet() {
+    let (temp_dir, files) = generate(
+        Language::Python,
+        MIXED_ENCODING_CONTRACT,
+        true,
+        "streaming-python-alphabets",
+    );
+    let client = file(&files, "client.py");
+    assert!(
+        client.contains("_PayloadSite((\"padded\",), False)"),
+        "{client}"
+    );
+    assert!(
+        client.contains("_PayloadSite((\"urlsafe\",), True)"),
+        "{client}"
+    );
+    assert!(
+        client.contains("_PayloadSite((\"echoed\",), True)"),
+        "{client}"
+    );
+    assert!(
+        client.contains("_decode_payload(encoded, slot.url_safe)"),
+        "{client}"
+    );
+    assert!(
+        client.contains("_encode_payload(payload, slot.url_safe)"),
+        "{client}"
+    );
+    fs::remove_dir_all(temp_dir).unwrap();
 }

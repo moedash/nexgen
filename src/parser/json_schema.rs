@@ -6376,10 +6376,16 @@ fn build_long_poll(
         } else {
             schema.properties.clone()
         };
-        // A model without `properties` is a shape this check cannot speak
-        // about (a map, a union); leave it to the emitter's own resolution.
+        // A generated loop reaches both members by name, and nothing downstream
+        // resolves a name against a map or a union, so a model without
+        // `properties` would emit an accessor for a member that does not exist.
         let Some(properties) = properties else {
-            continue;
+            return Err(Error::InvalidJsonSchema {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "operation `{operation_key}`: `{NEXUS_LONG_POLL_KEYWORD}` requires a `properties`-shaped {label} model to name `{member}` in; this {label} declares no `properties`"
+                ),
+            });
         };
         let Some(property) = properties.get(member) else {
             return Err(Error::InvalidJsonSchema {
@@ -8130,16 +8136,40 @@ fn json_model_spec(
 ) -> Result<JsonModelSpec<Symbol>> {
     let schema =
         resolve_schema_refs_for_generation(model, &model.schema, docs, models, module_paths)?;
+    let value = serde_json::to_value(&schema).map_err(|error| Error::InvalidJsonSchema {
+        path: PathBuf::from("<json-schema>"),
+        reason: format!(
+            "failed to preserve JSON schema model `{}`: {error}",
+            model.full_name
+        ),
+    })?;
+    validate_annotation_positions(&model.canonical_path, &model.full_name, &value)?;
     Ok(JsonModelSpec {
         name: json_model_symbol(model, module_paths),
         model_name: model.model_name.clone(),
-        schema: serde_json::to_value(&schema).map_err(|error| Error::InvalidJsonSchema {
-            path: PathBuf::from("<json-schema>"),
-            reason: format!(
-                "failed to preserve JSON schema model `{}`: {error}",
-                model.full_name
-            ),
-        })?,
+        schema: value,
+    })
+}
+
+/// Refuses a streaming annotation at a position nothing downstream reads.
+///
+/// The grammar checks pass on these: the keyword is spelled correctly and sits
+/// on a node of the right type. What fails is the lowering, silently, and for
+/// `x-nexus-payload` the silence means bytes the contract marked for the codec
+/// travel in the clear.
+fn validate_annotation_positions(path: &Path, full_name: &str, schema: &Value) -> Result<()> {
+    let inert = crate::json_schema::streaming::unaddressable_annotations(schema);
+    if inert.is_empty() {
+        return Ok(());
+    }
+    Err(Error::InvalidJsonSchema {
+        path: path.to_path_buf(),
+        reason: format!(
+            "model `{full_name}`: {} sits where the generator cannot address it. A payload is \
+             reached through `properties`, `items` and `oneOf` only, and a cursor is reported \
+             on a model's direct property only",
+            inert.join("; ")
+        ),
     })
 }
 

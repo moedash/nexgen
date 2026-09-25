@@ -15,6 +15,7 @@ use crate::generator::go::{
 use crate::generator::json_schema::client::{
     ClientLongPoll, ClientModel, ClientOperation, ClientPlan, ClientService,
 };
+use crate::json_schema::content_encoding::Encoding;
 use crate::json_schema::streaming::PayloadStep;
 
 /// The file the caller is emitted to, in the same flat package as the models.
@@ -55,6 +56,14 @@ fn long_poll_method_name(
             &long_poll.result_member
         )
     )
+}
+
+/// The `encoding/base64` value for one site's alphabet.
+fn go_base64_encoding(encoding: Encoding) -> &'static str {
+    match encoding {
+        Encoding::Base64 => "base64.StdEncoding",
+        Encoding::Base64Url => "base64.RawURLEncoding",
+    }
 }
 
 /// The package-level variable holding one model's payload sites.
@@ -127,13 +136,22 @@ type payloadStep struct {
 	each   bool
 }
 
+// payloadSite is one site's step chain together with the alphabet its wire
+// string is written in. The two base64 alphabets are not interchangeable, so a
+// site carries its own rather than the walker assuming one.
+type payloadSite struct {
+	steps    []payloadStep
+	encoding *base64.Encoding
+}
+
 // payloadSlot is a place in the decoded request or response body holding one
 // payload, addressed so it can be read and written back.
 type payloadSlot struct {
-	object map[string]any
-	key    string
-	array  []any
-	index  int
+	object   map[string]any
+	key      string
+	array    []any
+	index    int
+	encoding *base64.Encoding
 }
 
 func (s payloadSlot) get() any {
@@ -151,7 +169,9 @@ func (s payloadSlot) set(value any) {
 	s.array[s.index] = value
 }
 
-func collectPayloadSlots(node any, steps []payloadStep, out *[]payloadSlot) {
+func collectPayloadSlots(
+	node any, steps []payloadStep, encoding *base64.Encoding, out *[]payloadSlot,
+) {
 	if len(steps) == 0 {
 		return
 	}
@@ -163,10 +183,10 @@ func collectPayloadSlots(node any, steps []payloadStep, out *[]payloadSlot) {
 		}
 		for index := range entries {
 			if len(rest) == 0 {
-				*out = append(*out, payloadSlot{array: entries, index: index})
+				*out = append(*out, payloadSlot{array: entries, index: index, encoding: encoding})
 				continue
 			}
-			collectPayloadSlots(entries[index], rest, out)
+			collectPayloadSlots(entries[index], rest, encoding, out)
 		}
 		return
 	}
@@ -178,24 +198,25 @@ func collectPayloadSlots(node any, steps []payloadStep, out *[]payloadSlot) {
 		return
 	}
 	if len(rest) == 0 {
-		*out = append(*out, payloadSlot{object: members, key: head.member})
+		*out = append(*out, payloadSlot{object: members, key: head.member, encoding: encoding})
 		return
 	}
-	collectPayloadSlots(members[head.member], rest, out)
+	collectPayloadSlots(members[head.member], rest, encoding, out)
 }
 
 // applyPayloadCodec runs every payload the sites reach through transform, in one
 // call, and answers with the rewritten body.
 //
 // The codec sees one slice per request, so whatever it does (a key fetch, a
-// round trip) is paid once for the whole batch. The wire form is base64, so the
-// bytes handed over are the decoded ones. A body whose sites reach nothing is
+// round trip) is paid once for the whole batch. Each site is decoded and
+// re-encoded in its own alphabet, so a member the contract wrote as base64url
+// goes back on the wire as base64url. A body whose sites reach nothing is
 // returned untouched, so an operation that happens to carry no payload costs
 // nothing beyond the walk.
 func applyPayloadCodec(
 	ctx context.Context,
 	body []byte,
-	sites [][]payloadStep,
+	sites []payloadSite,
 	transform func(context.Context, [][]byte) ([][]byte, error),
 ) ([]byte, error) {
 	var node any
@@ -204,7 +225,7 @@ func applyPayloadCodec(
 	}
 	var slots []payloadSlot
 	for _, site := range sites {
-		collectPayloadSlots(node, site, &slots)
+		collectPayloadSlots(node, site.steps, site.encoding, &slots)
 	}
 	if len(slots) == 0 {
 		return body, nil
@@ -215,7 +236,7 @@ func applyPayloadCodec(
 		if !ok {
 			return nil, fmt.Errorf("payload at %q is not a base64 string", slot.key)
 		}
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		decoded, err := slot.encoding.DecodeString(encoded)
 		if err != nil {
 			return nil, fmt.Errorf("decode payload at %q: %w", slot.key, err)
 		}
@@ -231,7 +252,7 @@ func applyPayloadCodec(
 		)
 	}
 	for index, slot := range slots {
-		slot.set(base64.StdEncoding.EncodeToString(transformed[index]))
+		slot.set(slot.encoding.EncodeToString(transformed[index]))
 	}
 	rewritten, err := json.Marshal(node)
 	if err != nil {
@@ -268,9 +289,9 @@ fn render_payload_site_variables(output: &mut String, service: &ClientService) {
             );
             output.push_str("var ");
             output.push_str(&name);
-            output.push_str(" = [][]payloadStep{\n");
+            output.push_str(" = []payloadSite{\n");
             for site in model.payload_sites() {
-                output.push_str("\t{");
+                output.push_str("\t{steps: []payloadStep{");
                 for (index, step) in site.steps.iter().enumerate() {
                     if index > 0 {
                         output.push_str(", ");
@@ -284,6 +305,8 @@ fn render_payload_site_variables(output: &mut String, service: &ClientService) {
                         PayloadStep::Each => output.push_str("{each: true}"),
                     }
                 }
+                output.push_str("}, encoding: ");
+                output.push_str(go_base64_encoding(site.encoding));
                 output.push_str("},\n");
             }
             output.push_str("}\n\n");
