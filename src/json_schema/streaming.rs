@@ -1,8 +1,8 @@
 //! The streaming annotations (`x-nexus-cursor`, `x-nexus-payload`,
-//! `x-nexus-long-poll`) and the language-neutral analysis a generated caller
-//! needs from them.
+//! `x-nexus-long-poll`, `x-nexus-stream-ref`) and the language-neutral analysis
+//! a generated caller needs from them.
 //!
-//! The three keywords are declared here so the loader that validates them and
+//! The four keywords are declared here so the loader that validates them and
 //! the emitters that honor them share one vocabulary. Everything in this module
 //! reads authored JSON Schema and yields wire-level facts (member names, array
 //! hops); no target-language policy lives here.
@@ -24,6 +24,11 @@ pub const PAYLOAD_KEYWORD: &str = "x-nexus-payload";
 
 /// Marks an `operations:` entry as long-pollable.
 pub const LONG_POLL_KEYWORD: &str = "x-nexus-long-poll";
+
+/// Marks a `$defs` model as the SDK's stream reference: the value an operation
+/// takes or returns to hand a stream to its caller. The model's members are the
+/// wire form; a target with a stream SDK emits that SDK's own type in its place.
+pub const STREAM_REF_KEYWORD: &str = "x-nexus-stream-ref";
 
 /// The `x-nexus-long-poll` member naming the input's wait-hint member.
 pub const LONG_POLL_WAIT_MEMBER: &str = "wait-field";
@@ -66,6 +71,14 @@ pub fn node_encoding(schema: &Value) -> Option<Encoding> {
 pub fn payload_marked(schema: &Value) -> bool {
     schema
         .get(PAYLOAD_KEYWORD)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Whether a schema node declares itself the stream reference.
+pub fn stream_ref_marked(schema: &Value) -> bool {
+    schema
+        .get(STREAM_REF_KEYWORD)
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
@@ -334,6 +347,9 @@ fn walk_addressability(schema: &Value, path: &str, reach: Reach, found: &mut Vec
     if cursor_name(schema).is_some() && !reach.cursor {
         found.push(format!("{}: `{CURSOR_KEYWORD}`", position(path)));
     }
+    // `x-nexus-stream-ref` needs no position rule here: the loader hoists
+    // every inline object into a model of its own before this walk, so the
+    // marker is only ever read at a model root.
     if let Some(properties) = members.get("properties").and_then(Value::as_object) {
         let child_reach = Reach {
             payload: reach.payload,
@@ -581,6 +597,19 @@ mod tests {
             unaddressable_annotations(&schema),
             vec!["properties.nested.properties.deep: `x-nexus-cursor`".to_string()]
         );
+    }
+
+    #[test]
+    fn reads_the_stream_ref_marker_off_a_model_root() {
+        let schema = json!({
+            "type": "object",
+            "x-nexus-stream-ref": true,
+            "properties": { "topic": { "type": "string" } },
+            "additionalProperties": false,
+        });
+        assert!(stream_ref_marked(&schema));
+        assert!(!stream_ref_marked(&json!({ "type": "object" })));
+        assert!(!stream_ref_marked(&json!({ "x-nexus-stream-ref": false })));
     }
 
     #[test]

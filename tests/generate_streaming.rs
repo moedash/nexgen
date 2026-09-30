@@ -868,3 +868,252 @@ fn two_files_naming_one_token_type_declare_it_once() {
     );
     fs::remove_dir_all(temp_dir).unwrap();
 }
+
+/// A stream reference marked as such: one operation hands it back, and the
+/// read takes it in place of an owner and a topic spelled out.
+const STREAM_REF_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  ScoresService:
+    fqn: example.scores.v1.ScoresService
+    operations:
+      startGame:
+        fqn: startGame
+        input: { $ref: "#/$defs/GameRequest" }
+        output: { $ref: "#/$defs/StreamRef" }
+      read:
+        fqn: read
+        x-nexus-long-poll:
+          wait-field: waitMs
+          result-field: records
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+$defs:
+  GameRequest:
+    type: object
+    properties:
+      gameId: { type: string }
+    required: [gameId]
+    additionalProperties: false
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    description: "A stream: its owner and the topic on it."
+    properties:
+      owner: { type: string, enum: [workflow, activity, standalone] }
+      workflow_id: { type: string }
+      run_id: { type: string }
+      activity_id: { type: string }
+      stream_id: { type: string }
+      topic: { type: string }
+    required: [owner, topic]
+    additionalProperties: false
+  ReadInput:
+    type: object
+    properties:
+      stream: { $ref: "#/$defs/StreamRef" }
+      afterToken: { type: string, x-nexus-cursor: StreamCursor }
+      waitMs: { type: integer }
+    required: [stream]
+    additionalProperties: false
+  ReadOutput:
+    type: object
+    properties:
+      records:
+        type: array
+        items: { type: string, contentEncoding: base64 }
+        x-nexus-payload: true
+      nextToken: { type: string, x-nexus-cursor: StreamCursor }
+    additionalProperties: false
+"##;
+
+#[test]
+fn python_emits_the_stream_reference_as_the_sdk_type() {
+    let (temp_dir, files) = generate(
+        Language::Python,
+        STREAM_REF_CONTRACT,
+        false,
+        "streaming-python-stream-ref",
+    );
+    let models = file(&files, "models.py");
+    // The SDK's own type stands where the wire dataclass would, so a value
+    // read off an operation is the one a handle opens.
+    assert!(models.contains("import temporalio.streams\n"), "{models}");
+    assert!(
+        models.contains("StreamRef: typing.TypeAlias = temporalio.streams.StreamRef\n"),
+        "{models}"
+    );
+    assert!(
+        models.contains("\"\"\"A stream: its owner and the topic on it.\"\"\""),
+        "{models}"
+    );
+    assert!(!models.contains("class StreamRef"), "{models}");
+    // The converter stays and builds the SDK type from the wire members.
+    assert!(
+        models.contains("class _StreamRefTransferTypeConverter("),
+        "{models}"
+    );
+    assert!(models.contains("return StreamRef(\n"), "{models}");
+    assert!(
+        models.contains("isinstance(runtime_value, StreamRef)"),
+        "{models}"
+    );
+    // A member typed by the model names the alias like any other model.
+    assert!(models.contains("stream: StreamRef\n"), "{models}");
+    // An operation whose output is the model returns the SDK type.
+    let services = file(&files, "services.py");
+    assert!(services.contains("StreamRef,"), "{services}");
+    assert!(file(&files, "__init__.py").contains("\"StreamRef\""));
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn python_client_hands_back_the_sdk_stream_reference() {
+    let (temp_dir, files) = generate(
+        Language::Python,
+        STREAM_REF_CONTRACT,
+        true,
+        "streaming-python-stream-ref-client",
+    );
+    let client = file(&files, "client.py");
+    assert!(client.contains(") -> StreamRef:"), "{client}");
+    assert!(
+        client.contains("_StreamRefTransferTypeConverter().from_transfer_type(answer, StreamRef)"),
+        "{client}"
+    );
+    // The long-poll loop is unchanged by the reference the read carries.
+    assert!(client.contains("async def read_until_records("), "{client}");
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn go_keeps_the_stream_reference_as_a_wire_struct() {
+    // No Go stream SDK exists to swap in, so the wire model is what a Go caller
+    // holds, and the keyword changes nothing there.
+    let (temp_dir, files) = generate(
+        Language::Go,
+        STREAM_REF_CONTRACT,
+        false,
+        "streaming-go-stream-ref",
+    );
+    let declarations: usize = files
+        .iter()
+        .map(|(_, contents)| contents.matches("type StreamRef struct").count())
+        .sum();
+    assert_eq!(declarations, 1);
+    for (name, contents) in &files {
+        assert!(
+            !contents.contains("x-nexus-"),
+            "{name} leaked an annotation keyword"
+        );
+    }
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn the_other_targets_ignore_the_stream_reference_marker() {
+    for language in [Language::TypeScript, Language::Java] {
+        let temp_dir = unique_output_path("streaming-other-targets-stream-ref");
+        let input_dir = temp_dir.join("input");
+        fs::create_dir_all(&input_dir).unwrap();
+        let input_path = input_dir.join("scores.nexusrpc.yaml");
+        fs::write(&input_path, STREAM_REF_CONTRACT).unwrap();
+        let output_path = temp_dir.join("scores");
+        generate_to_file(&GenerateRequest {
+            config: NexgenConfig::default(),
+            language,
+            input_paths: vec![input_path],
+            support_paths: Vec::new(),
+            descriptor_paths: Vec::new(),
+            output_path: output_path.clone(),
+            format: false,
+            java_package_name: (language == Language::Java)
+                .then(|| "json_schema.scores".to_string()),
+            ts_date_time_types: Default::default(),
+        })
+        .unwrap_or_else(|error| panic!("{language:?} should generate: {error}"));
+        for (name, contents) in read_files(&output_path) {
+            assert!(
+                !contents.contains("x-nexus-"),
+                "{language:?} {name} leaked an annotation keyword"
+            );
+        }
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+}
+
+/// A reference with no members: nothing to build the SDK type from.
+const MEMBERLESS_STREAM_REF_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  ScoresService:
+    fqn: example.scores.v1.ScoresService
+    operations:
+      startGame:
+        fqn: startGame
+        output: { $ref: "#/$defs/StreamRef" }
+$defs:
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    additionalProperties: false
+"##;
+
+/// The marker on an inline object, which the loader hoists into a model of its
+/// own before the marker is read.
+const INLINE_STREAM_REF_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  ScoresService:
+    fqn: example.scores.v1.ScoresService
+    operations:
+      read:
+        fqn: read
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      stream:
+        type: object
+        x-nexus-stream-ref: true
+        properties:
+          topic: { type: string }
+        additionalProperties: false
+    additionalProperties: false
+"##;
+
+#[test]
+fn a_stream_ref_needs_a_closed_model_with_members() {
+    let message = refusal(
+        MEMBERLESS_STREAM_REF_CONTRACT,
+        "streaming-stream-ref-memberless",
+    );
+    assert!(
+        message.contains("`x-nexus-stream-ref` requires a `type: object` model with `properties`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_marked_inline_object_is_hoisted_into_the_stream_reference() {
+    let (temp_dir, files) = generate(
+        Language::Python,
+        INLINE_STREAM_REF_CONTRACT,
+        false,
+        "streaming-python-stream-ref-inline",
+    );
+    let models = file(&files, "models.py");
+    // The hoisted model carries the marker, so it is the one aliased; the
+    // member is typed by the hoisted name like any inline object's.
+    assert!(
+        models.contains("ReadInputStream: typing.TypeAlias = temporalio.streams.StreamRef\n"),
+        "{models}"
+    );
+    assert!(
+        models.contains("stream: ReadInputStream | None = None\n"),
+        "{models}"
+    );
+    assert!(!models.contains("class ReadInputStream"), "{models}");
+    fs::remove_dir_all(temp_dir).unwrap();
+}

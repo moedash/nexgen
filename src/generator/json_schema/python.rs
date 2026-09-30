@@ -875,7 +875,11 @@ pub(in crate::generator) fn render_external_models(
         push_section(&mut body);
         render_model_converter(&mut body, model, &schema, json_models)?;
         push_section(&mut body);
-        render_model_dataclass(&mut body, model, &schema)?;
+        if crate::json_schema::streaming::stream_ref_marked(&model.schema) {
+            render_stream_ref_alias(&mut body, model, &schema);
+        } else {
+            render_model_dataclass(&mut body, model, &schema)?;
+        }
     }
 
     // A `TypeAlias` cannot be decorated and `type[A | B]` is not a valid
@@ -949,6 +953,7 @@ pub(in crate::generator) fn render_external_models(
     let module_imports = BTreeSet::from([
         "temporalio.converter".to_string(),
         "temporalio.exceptions".to_string(),
+        "temporalio.streams".to_string(),
         "datetime".to_string(),
         "math".to_string(),
         "re".to_string(),
@@ -989,6 +994,33 @@ pub(in crate::generator) fn render_external_models(
         declared_type_parameters: BTreeSet::new(),
         allows_private_wire_access: false,
     })
+}
+
+/// The SDK type a stream reference is emitted as (`x-nexus-stream-ref`).
+const PYTHON_STREAM_REF_TYPE: &str = "temporalio.streams.StreamRef";
+
+/// Emits a stream-reference model as the SDK's own type rather than a wire
+/// dataclass, so an operation that takes or returns one hands the caller the
+/// value `client.get_stream_handle()` opens, with no copy in between.
+///
+/// The model's converter is still emitted and still owns the wire form: it
+/// builds the SDK type from the declared members by keyword and reads them back
+/// by attribute, which is why the loader requires the model to declare them.
+/// Only the class body is replaced, so a member typed by the model, and an
+/// operation whose input or output is the model, name the alias unchanged.
+fn render_stream_ref_alias(output: &mut String, model: &PlannedJsonType, schema: &Schema) {
+    output.push_str(&model.model_name);
+    output.push_str(": typing.TypeAlias = ");
+    output.push_str(PYTHON_STREAM_REF_TYPE);
+    output.push('\n');
+    render_python_docstring(
+        output,
+        "",
+        compose_python_doc(schema.title.as_deref(), schema.description.as_deref()).as_deref(),
+        &[],
+        None,
+        false,
+    );
 }
 
 /// The opaque token types the contract declares (`x-nexus-cursor`), emitted

@@ -1,6 +1,6 @@
 # Streaming extensions
 
-A proposal, not a merge request. Three extensions that let a stream
+A proposal, not a merge request. Four extensions that let a stream
 endpoint's contract say what its callers need, so every language SDK stops
 writing the same wrapper by hand.
 
@@ -17,6 +17,7 @@ in the wrapper is the requirements list below.
 | `x-nexus-cursor` | a model's direct `type: string` property | the emitted token type's name |
 | `x-nexus-payload` | a bytes node the walk can address, or an array of them | `true` |
 | `x-nexus-long-poll` | an `operations:` entry | `{wait-field, result-field}` |
+| `x-nexus-stream-ref` | a `$defs` model | `true` |
 | `x-nexus-handle` | a `services:` entry | emitted handle type names to their key member lists |
 
 ```yaml
@@ -29,13 +30,30 @@ services:
           result-field: records
         input: { $ref: "#/$defs/ReadInput" }
         output: { $ref: "#/$defs/ReadOutput" }
+      startGame:
+        input: { $ref: "#/$defs/GameRequest" }
+        output: { $ref: "#/$defs/StreamRef" }
 $defs:
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    properties:
+      owner: { type: string, enum: [workflow, activity, standalone] }
+      workflow_id: { type: string }
+      run_id: { type: string }
+      activity_id: { type: string }
+      stream_id: { type: string }
+      topic: { type: string }
+    required: [owner, topic]
+    additionalProperties: false
   ReadInput:
     properties:
+      stream: { $ref: "#/$defs/StreamRef" }
       afterToken: { type: string, x-nexus-cursor: StreamCursor }
       waitMs: { type: integer }
   AppendInput:
     properties:
+      stream: { $ref: "#/$defs/StreamRef" }
       payloads:
         type: array
         x-nexus-payload: true
@@ -60,6 +78,17 @@ The long-poll members name **wire** members, not emitted identifiers,
 because the authored contract is the only thing both ends of a call agree
 on. Each emitter resolves them through its own `x-<lang>-name` mapping.
 
+`x-nexus-stream-ref` sits on a **model**. A stream reference is a type
+the contract shares between operations, the way the token type is: the
+read and the append take it in place of an owner and a topic spelled out,
+and an operation that starts a stream returns it. A member carries it
+through its `$ref`; an operation whose `input` or `output` is the model
+carries it whole; an inline object marked as one is hoisted into a model
+first, as every inline object is, and the hoisted model carries the
+marker. The members are the reference's wire form, so a target with no
+stream SDK still has a type to hold. The model has to be a closed object
+with members, because the SDK type is built from them by keyword.
+
 ## What each target emits
 
 **Cursor type, Go and Python, always.** Python
@@ -76,6 +105,16 @@ See open question 1. Because the emitted type is referenced by nothing but its
 own doc comment today, the keyword is admitted on a model's direct property
 only: anywhere else it declared a type and registered no member, which read as
 two behaviours by position.
+
+**Stream reference, Python, always.** A marked model is emitted as
+`StreamRef: typing.TypeAlias = temporalio.streams.StreamRef` in place of
+its dataclass, with `temporalio.streams` imported, so the value an
+operation returns is the one `client.get_stream_handle()` opens. The
+model's converter is emitted as usual and owns the wire form: it builds
+the SDK type from the wire members by keyword and reads them back by
+attribute. The other four targets emit the model unchanged; Go has no
+stream SDK to swap in yet, and `type StreamRef struct` is what a Go
+caller holds.
 
 **HTTP callers, behind a new `--client` flag on the `go` and `python`
 subcommands.** One `{Service}HttpClient` / `{Service}HTTPClient` per
@@ -114,7 +153,7 @@ caller can still read its resume token. The single-shot method stays.
 
 ## The `advanced` feature
 
-The `--client` flag is behind `advanced`; the three annotations are not.
+The `--client` flag is behind `advanced`; the four annotations are not.
 
 The flag follows the repo's own rule: `advanced` is the CLI surface README.md
 does not document, and the existing `{Service}Client` emitters are already
@@ -237,3 +276,9 @@ the Python backend do the same, or should a caller keep reaching inside?
   or emits it yet.
 - The cursor type name is not checked against the model names it shares a
   namespace with.
+- A stream reference's members are not checked against the SDK type's
+  fields. A member the SDK does not know is a type error in the generated
+  module, caught by the type checker rather than by the loader. Only
+  Python swaps the SDK type in; the shipping `temporal_streams.nexusrpc.yaml`
+  on sdk-python stays stock-parsable, so its `StreamRef` model is not
+  marked and the front maps the wire model onto the SDK type by hand.

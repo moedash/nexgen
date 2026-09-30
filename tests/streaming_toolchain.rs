@@ -60,6 +60,55 @@ $defs:
     additionalProperties: false
 "##;
 
+/// An operation that hands back a stream reference and a read that takes one,
+/// so the emitted converter is run against the SDK type it builds.
+const STREAM_REF_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  ScoresService:
+    fqn: example.scores.v1.ScoresService
+    operations:
+      startGame:
+        fqn: startGame
+        input: { $ref: "#/$defs/GameRequest" }
+        output: { $ref: "#/$defs/StreamRef" }
+      read:
+        fqn: read
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+$defs:
+  GameRequest:
+    type: object
+    properties:
+      gameId: { type: string }
+    required: [gameId]
+    additionalProperties: false
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    properties:
+      owner: { type: string, enum: [workflow, activity, standalone] }
+      workflow_id: { type: string }
+      run_id: { type: string }
+      activity_id: { type: string }
+      stream_id: { type: string }
+      topic: { type: string }
+    required: [owner, topic]
+    additionalProperties: false
+  ReadInput:
+    type: object
+    properties:
+      stream: { $ref: "#/$defs/StreamRef" }
+      afterToken: { type: string }
+    required: [stream]
+    additionalProperties: false
+  ReadOutput:
+    type: object
+    properties:
+      records: { type: array, items: { type: string } }
+    additionalProperties: false
+"##;
+
 fn write_contract(workspace: &Workspace) -> PathBuf {
     let path = workspace.root().join("streams.nexusrpc.yaml");
     fs::write(&path, CONTRACT).expect("write the contract");
@@ -70,6 +119,16 @@ fn write_contract(workspace: &Workspace) -> PathBuf {
 /// not do: its request is the definitions-only one the conformance drivers use.
 fn generate_client(workspace: &Workspace, target: Target, dir: &str) -> PathBuf {
     let contract = write_contract(workspace);
+    generate_client_from(workspace, target, dir, contract)
+}
+
+/// Generates `dir` from a contract already written into the workspace.
+fn generate_client_from(
+    workspace: &Workspace,
+    target: Target,
+    dir: &str,
+    contract: PathBuf,
+) -> PathBuf {
     let output_path = workspace.package_path(target, dir);
     fs::create_dir_all(output_path.parent().expect("a package parent"))
         .expect("create the package parent");
@@ -242,5 +301,85 @@ fn the_generated_python_caller_runs_each_alphabet() {
         .arg(&driver)
         .arg(package.join("client.py")))
     .expect_ok("run the generated payload walker");
+    assert!(output.contains("ok"), "{output}");
+}
+
+/// Runs the emitted stream-reference converter against the type it builds.
+///
+/// The generated module imports `temporalio.streams.StreamRef` by name, which
+/// the SDK release the sample environment installs does not carry yet, so the
+/// driver stands one in with the members the contract declares. What is
+/// checked is the emitted code's contract with that type: built by keyword
+/// from the wire members, read back by attribute, and handed through unchanged
+/// where a wire dataclass would have been copied.
+const PYTHON_STREAM_REF_DRIVER: &str = r#"
+import dataclasses
+import importlib
+import pathlib
+import sys
+import types
+
+package = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(package.parent))
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamRef:
+    owner: str
+    topic: str
+    workflow_id: str | None = None
+    run_id: str | None = None
+    activity_id: str | None = None
+    stream_id: str | None = None
+
+
+import temporalio
+
+streams = types.ModuleType("temporalio.streams")
+streams.StreamRef = StreamRef
+sys.modules["temporalio.streams"] = streams
+temporalio.streams = streams
+
+models = importlib.import_module(f"{package.name}.models")
+assert models.StreamRef is StreamRef, models.StreamRef
+
+ref = StreamRef(owner="workflow", topic="scores", workflow_id="game-1")
+request = models.ReadInput(stream=ref, after_token="t1")
+converter = models._ReadInputTransferTypeConverter()
+wire = converter.to_transfer_type(request)
+assert wire == {
+    "stream": {"owner": "workflow", "workflow_id": "game-1", "topic": "scores"},
+    "afterToken": "t1",
+}, wire
+back = converter.from_transfer_type(wire, models.ReadInput)
+assert type(back.stream) is StreamRef, type(back.stream)
+assert back.stream == ref, back.stream
+
+# The reference alone crosses as an operation result.
+alone = models._StreamRefTransferTypeConverter()
+assert alone.from_transfer_type(alone.to_transfer_type(ref), StreamRef) == ref
+print("ok")
+"#;
+
+#[test]
+fn the_generated_python_stream_reference_round_trips_through_the_sdk_type() {
+    let workspace = Workspace::new("streaming-python-stream-ref-toolchain");
+    let contract = workspace.root().join("scores.nexusrpc.yaml");
+    fs::write(&contract, STREAM_REF_CONTRACT).expect("write the contract");
+    let package = generate_client_from(&workspace, Target::Python, "scores", contract);
+    let driver = workspace.root().join("drive_stream_ref.py");
+    fs::write(&driver, PYTHON_STREAM_REF_DRIVER).expect("write the driver");
+
+    let interpreter = python_interpreter();
+    run(command(&interpreter.to_string_lossy())
+        .arg("-m")
+        .arg("compileall")
+        .arg("-q")
+        .arg(&package))
+    .expect_ok("compile the generated stream reference module");
+    let output = run(command(&interpreter.to_string_lossy())
+        .arg(&driver)
+        .arg(&package))
+    .expect_ok("round-trip the stream reference");
     assert!(output.contains("ok"), "{output}");
 }

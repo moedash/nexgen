@@ -398,6 +398,7 @@ use crate::json_schema::streaming::{
     CURSOR_KEYWORD as NEXUS_CURSOR_KEYWORD, LONG_POLL_KEYWORD as NEXUS_LONG_POLL_KEYWORD,
     LONG_POLL_RESULT_MEMBER as NEXUS_LONG_POLL_RESULT_MEMBER,
     LONG_POLL_WAIT_MEMBER as NEXUS_LONG_POLL_WAIT_MEMBER, PAYLOAD_KEYWORD as NEXUS_PAYLOAD_KEYWORD,
+    STREAM_REF_KEYWORD as NEXUS_STREAM_REF_KEYWORD,
 };
 
 /// Keywords admitted by the strict schema-node grammar. This is deliberately
@@ -460,7 +461,10 @@ fn schema_extra_keyword_is_known(keyword: &str) -> bool {
             | "x-go-enum-names"
             | "x-java-enum-names"
     ) || LANG_NAME_KEYWORDS.contains(&keyword)
-        || matches!(keyword, NEXUS_CURSOR_KEYWORD | NEXUS_PAYLOAD_KEYWORD)
+        || matches!(
+            keyword,
+            NEXUS_CURSOR_KEYWORD | NEXUS_PAYLOAD_KEYWORD | NEXUS_STREAM_REF_KEYWORD
+        )
 }
 
 /// Whether a node declares its bytes to be codec-owned payloads.
@@ -532,6 +536,34 @@ fn validate_nexus_annotations(path: &Path, schema: &Schema, context: &str) -> Re
             if !materializes_to_bytes(schema) && !items_are_bytes {
                 return reject(format!(
                     "`{NEXUS_PAYLOAD_KEYWORD}` requires a node that materializes to bytes; add `contentEncoding: base64` (or `base64url`) to this node or, for a batch, to its `items`"
+                ));
+            }
+        }
+    }
+
+    if let Some(value) = schema.extra.get(NEXUS_STREAM_REF_KEYWORD) {
+        if !value.is_boolean() {
+            return reject(format!(
+                "`{NEXUS_STREAM_REF_KEYWORD}` must be a boolean, got {value}"
+            ));
+        }
+        if value.as_bool() == Some(true) {
+            // The SDK type is built from the wire members by name, so the model
+            // has to declare them, and a member the reference does not know
+            // could only be dropped, so the object has to be closed.
+            let is_object = schema.ty.as_ref().and_then(Value::as_str) == Some("object");
+            let has_members = schema
+                .properties
+                .as_ref()
+                .is_some_and(|properties| !properties.is_empty());
+            if !is_object || !has_members {
+                return reject(format!(
+                    "`{NEXUS_STREAM_REF_KEYWORD}` requires a `type: object` model with `properties`; the members are the reference's wire form"
+                ));
+            }
+            if schema.additional_properties.as_ref() != Some(&Value::Bool(false)) {
+                return reject(format!(
+                    "`{NEXUS_STREAM_REF_KEYWORD}` requires `additionalProperties: false`; a stream reference has no member the SDK type would not know"
                 ));
             }
         }
@@ -11129,6 +11161,114 @@ $defs:
 "##,
         );
         assert!(error.contains("mutually exclusive on one node"), "{error}");
+    }
+
+    #[test]
+    fn keeps_a_stream_ref_marker_on_the_loaded_model() {
+        let schema = model_schema(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    properties:
+      owner: { type: string, enum: [workflow, activity, standalone] }
+      workflow_id: { type: string }
+      topic: { type: string }
+    required: [owner, topic]
+    additionalProperties: false
+  ReadInput:
+    type: object
+    properties:
+      stream: { $ref: "#/$defs/StreamRef" }
+    required: [stream]
+    additionalProperties: false
+"##,
+            "StreamRef",
+        );
+        assert_eq!(schema["x-nexus-stream-ref"], true);
+    }
+
+    #[test]
+    fn rejects_a_stream_ref_without_members() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/StreamRef" }
+$defs:
+  StreamRef:
+    type: string
+    x-nexus-stream-ref: true
+"##,
+        );
+        assert!(
+            error
+                .contains("`x-nexus-stream-ref` requires a `type: object` model with `properties`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_an_open_stream_ref() {
+        let error = doc_reject(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/StreamRef" }
+$defs:
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    properties:
+      topic: { type: string }
+"##,
+        );
+        assert!(
+            error.contains("`x-nexus-stream-ref` requires `additionalProperties: false`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn hoists_a_marked_inline_object_into_a_stream_ref_model() {
+        // The hoist runs before the marker is read, so an inline object marked
+        // as the reference becomes a model of its own carrying the marker.
+        let schema = model_schema(
+            r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    operations:
+      read:
+        input: { $ref: "#/$defs/ReadInput" }
+$defs:
+  ReadInput:
+    type: object
+    properties:
+      stream:
+        type: object
+        x-nexus-stream-ref: true
+        properties:
+          topic: { type: string }
+        additionalProperties: false
+    additionalProperties: false
+"##,
+            "ReadInputStream",
+        );
+        assert_eq!(schema["x-nexus-stream-ref"], true);
     }
 
     #[test]
