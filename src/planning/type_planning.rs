@@ -1568,6 +1568,7 @@ mod tests {
                 experimental: false,
                 deprecated: false,
                 delay_load_temporalio_workflow: false,
+                handles: Vec::new(),
                 operations: vec![OperationSpec {
                     name: "example-operation".to_string(),
                     code_name: LanguageStringSpec::default(),

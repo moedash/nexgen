@@ -541,9 +541,27 @@ pub struct ServiceSpec<F: TypeFamily = AuthoredFamily> {
     /// target-idiomatic marker and documentation syntax.
     pub deprecated: bool,
     pub delay_load_temporalio_workflow: bool,
+    /// The handle projections the service declares (`x-nexus-handle`), in
+    /// authored order. They change no wire behavior; they tell a generated
+    /// caller which identity-binding wrappers to emit over its flat methods.
+    pub handles: Vec<ServiceHandleSpec>,
     pub operations: Vec<OperationSpec<F>>,
     pub resources: Vec<ResourceSpec<F>>,
     pub data: F::ServiceData,
+}
+
+/// One handle projection authored on a service (`x-nexus-handle`).
+///
+/// `keys` are **wire** member names of the operations' inputs, not emitted
+/// identifiers, for the same reason the long-poll members are: the authored
+/// contract is the only thing both ends of a call agree on. An operation joins
+/// the handle when its input declares every key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceHandleSpec {
+    /// The emitted type name, in the model namespace.
+    pub name: String,
+    /// The bound members, in the order the constructor takes them.
+    pub keys: Vec<String>,
 }
 
 impl<F: TypeFamily> ServiceSpec<F> {
@@ -574,6 +592,7 @@ impl<F: TypeFamily> ServiceSpec<F> {
             experimental: self.experimental,
             deprecated: self.deprecated,
             delay_load_temporalio_workflow: self.delay_load_temporalio_workflow,
+            handles: self.handles,
             operations: self
                 .operations
                 .into_iter()

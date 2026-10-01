@@ -434,7 +434,7 @@ impl ModelBackend {
     pub(in crate::generator) fn client_plan(
         &self,
         api_plan: &PlannedSpec,
-    ) -> crate::generator::json_schema::client::ClientPlan {
+    ) -> Result<crate::generator::json_schema::client::ClientPlan> {
         let models = self
             .json_models
             .iter()
@@ -445,6 +445,9 @@ impl ModelBackend {
             .iter()
             .map(|model| (model.full_name.clone(), model.model_name.clone()))
             .collect();
+        // A handle member is typed the way the models module types the field,
+        // which resolves a `$ref` through this module's name manifest.
+        set_ref_names(&self.ref_names);
         crate::generator::json_schema::client::build_client_plan(
             api_plan,
             &models,
@@ -467,9 +470,34 @@ impl ModelBackend {
                             crate::generator::python::python_field_name(&operation.name)
                         })
                 },
+                member: &member_parameter_annotation,
             },
         )
     }
+}
+
+/// The annotation a handle gives an input member it binds or takes: the models
+/// module's own rule for the dataclass field and its initializer parameter,
+/// so the handle hands the model exactly what the field holds.
+pub(in crate::generator) fn member_parameter_annotation(
+    _model_name: &str,
+    _json_name: &str,
+    property: &Value,
+    required: bool,
+) -> Result<String> {
+    let schema: Schema =
+        serde_json::from_value(property.clone()).map_err(|error| Error::InvalidJsonSchema {
+            path: PathBuf::from("<python-client>"),
+            reason: format!("failed to read a handle member's schema: {error}"),
+        })?;
+    let base = annotation(&schema)?;
+    Ok(
+        if schema.default.is_some() || !required || allows_null(&schema) {
+            optional_annotation(&base)
+        } else {
+            base
+        },
+    )
 }
 
 #[derive(Debug, Default)]

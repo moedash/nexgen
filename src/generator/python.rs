@@ -344,7 +344,7 @@ impl PythonExternalModels {
         self.proto.owns_variant(full_name)
     }
 
-    fn client_plan(&self, api_plan: &PlannedSpec) -> ClientPlan {
+    fn client_plan(&self, api_plan: &PlannedSpec) -> Result<ClientPlan> {
         self.json.client_plan(api_plan)
     }
 
@@ -747,7 +747,7 @@ impl<'a> ApiPlanner<'a> {
         }
         if crate::nexgen_config::current().client
             && let Some(client_source) = python_client::render_client_module(
-                &self.external_models.client_plan(self.api_plan),
+                &self.external_models.client_plan(self.api_plan)?,
             )
         {
             files.insert(

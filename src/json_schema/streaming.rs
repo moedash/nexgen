@@ -1,8 +1,8 @@
 //! The streaming annotations (`x-nexus-cursor`, `x-nexus-payload`,
-//! `x-nexus-long-poll`, `x-nexus-stream-ref`) and the language-neutral analysis
-//! a generated caller needs from them.
+//! `x-nexus-long-poll`, `x-nexus-stream-ref`, `x-nexus-handle`) and the
+//! language-neutral analysis a generated caller needs from them.
 //!
-//! The four keywords are declared here so the loader that validates them and
+//! The five keywords are declared here so the loader that validates them and
 //! the emitters that honor them share one vocabulary. Everything in this module
 //! reads authored JSON Schema and yields wire-level facts (member names, array
 //! hops); no target-language policy lives here.
@@ -29,6 +29,36 @@ pub const LONG_POLL_KEYWORD: &str = "x-nexus-long-poll";
 /// takes or returns to hand a stream to its caller. The model's members are the
 /// wire form; a target with a stream SDK emits that SDK's own type in its place.
 pub const STREAM_REF_KEYWORD: &str = "x-nexus-stream-ref";
+
+/// Maps emitted handle type names to the ordered wire members they bind, on a
+/// `services:` entry. An operation joins a handle when its input carries every
+/// key member; the generated caller then exposes it as a method with those
+/// members bound.
+pub const HANDLE_KEYWORD: &str = "x-nexus-handle";
+
+/// The base a handle constructor's name is derived from, before a target
+/// cases it.
+///
+/// A trailing `Handle` is dropped, so `StreamHandle` is built by `stream`.
+/// Built from a parent handle, the parent's own base is dropped as a prefix
+/// when something is left of it, so `StreamProducer` built from `StreamHandle`
+/// reads `producer`, while from the flat client it stays `stream_producer`.
+/// One rule for every target keeps the two callers reading alike.
+pub fn handle_constructor_base(name: &str, parent: Option<&str>) -> String {
+    let base = name
+        .strip_suffix("Handle")
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(name);
+    if let Some(parent) = parent {
+        let parent_base = handle_constructor_base(parent, None);
+        if let Some(rest) = base.strip_prefix(parent_base.as_str())
+            && rest.chars().next().is_some_and(char::is_uppercase)
+        {
+            return rest.to_string();
+        }
+    }
+    base.to_string()
+}
 
 /// The `x-nexus-long-poll` member naming the input's wait-hint member.
 pub const LONG_POLL_WAIT_MEMBER: &str = "wait-field";
@@ -596,6 +626,31 @@ mod tests {
         assert_eq!(
             unaddressable_annotations(&schema),
             vec!["properties.nested.properties.deep: `x-nexus-cursor`".to_string()]
+        );
+    }
+
+    #[test]
+    fn derives_a_handle_constructor_from_its_name_and_parent() {
+        assert_eq!(handle_constructor_base("StreamHandle", None), "Stream");
+        assert_eq!(
+            handle_constructor_base("StreamProducer", None),
+            "StreamProducer"
+        );
+        assert_eq!(
+            handle_constructor_base("StreamProducer", Some("StreamHandle")),
+            "Producer"
+        );
+        // A parent whose base is not a prefix leaves the name whole.
+        assert_eq!(
+            handle_constructor_base("StreamProducer", Some("Session")),
+            "StreamProducer"
+        );
+        // A name that is only the suffix stays itself rather than vanishing.
+        assert_eq!(handle_constructor_base("Handle", None), "Handle");
+        // The prefix has to end on a word boundary.
+        assert_eq!(
+            handle_constructor_base("Streamer", Some("StreamHandle")),
+            "Streamer"
         );
     }
 

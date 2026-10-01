@@ -1,6 +1,6 @@
 # Streaming extensions
 
-A proposal, not a merge request. Four extensions that let a stream
+A proposal, not a merge request. Five extensions that let a stream
 endpoint's contract say what its callers need, so every language SDK stops
 writing the same wrapper by hand.
 
@@ -153,7 +153,7 @@ caller can still read its resume token. The single-shot method stays.
 
 ## The `advanced` feature
 
-The `--client` flag is behind `advanced`; the four annotations are not.
+The `--client` flag is behind `advanced`; the five annotations are not.
 
 The flag follows the repo's own rule: `advanced` is the CLI surface README.md
 does not document, and the existing `{Service}Client` emitters are already
@@ -165,13 +165,13 @@ parse under one build of the binary and fail under another, which is worse
 than a slightly wider authored vocabulary. A target that does not act on an
 annotation still accepts it, so one contract stays portable.
 
-## The handle projection, specified but not emitted
+## The handle projection
 
-The three keywords above still leave the largest piece of every wrapper
+The keywords above still leave the largest piece of every wrapper
 hand-written: the object that binds a stream's identity once and exposes the
 operations as methods. The shipping Python provider writes it as
 `NexusStreamHandle` and `NexusProducer`; every other language would write the
-same two classes again. A fourth keyword names that projection:
+same two classes again. A fifth keyword names that projection:
 
 ```yaml
 services:
@@ -199,7 +199,11 @@ The rules:
   twice under two names.
 - A handle whose key set extends another's is constructible from it, so
   `handle.producer(topic, producer_id, attempt)` falls out of the key sets
-  rather than being declared.
+  rather than being declared. The constructor is named after the handle: a
+  trailing `Handle` is dropped (`StreamHandle` is built by `stream`), and
+  from a parent the parent's own base is dropped as a prefix when something
+  is left (`StreamProducer` from `StreamHandle` is `producer`; from the flat
+  client it stays `stream_producer`). Each target cases the result.
 - A key member that is optional on the wire may be bound absent, and the
   handle sends what it holds. Absent is a bound value, not an unbound key: a
   handle that binds `run_id` absent is a different handle from one that binds
@@ -216,11 +220,27 @@ The rules:
   changes. A long-poll loop method appears on the handle like any other
   operation method.
 
-Unlike the other three, this one is specified without an implementation. The
-parser arm, the Python and Go emitters and their goldens are a follow-on, and
-the open questions below come first: the cursor's place in the wire model and
-the serialization entry point decide what a generated handle method may
-touch.
+**What each target emits.** Python: one class per handle after the caller,
+whose `__init__` takes the caller and the keys, whose operation methods take
+the free members as keyword parameters and post through the caller, and
+whose constructors sit on the caller and on parent handles. Go: one struct
+per handle and, per joined operation, a request type that is the
+operation's input without the bound members (`StreamHandleReadRequest`);
+the method builds the operation's own input from the handle's keys and that
+request, so the bound members leave the signature there too. Both ride
+behind `--client`. The other targets accept the keyword and emit nothing
+for it.
+
+**What the loader refuses.** A handle no operation joins; two handles over
+one key set; a key the joining operations declare differently (a handle
+holds one value per key and sends it on every call); a key with one
+admissible value; a handle named like a model or a token type in the file;
+a constructor name that collides with an operation or with another
+constructor on the same object.
+
+The open questions below still decide what a generated handle method may
+touch: the cursor's place in the wire model and the serialization entry
+point.
 
 ## Open questions
 
@@ -272,8 +292,12 @@ the Python backend do the same, or should a caller keep reaching inside?
   endpoint that answers empty faster than the wait it was given. It does not
   retry a transport error, which is the case a caller's own client settings
   already cover.
-- `x-nexus-handle` is specified above and not implemented; nothing parses
-  or emits it yet.
+- A handle key is a top-level member of the input. A member of a nested
+  model (`stream.workflow_id`) cannot be a key; the stream reference binds
+  the whole `stream` member instead.
+- A Go handle's loop method shares the per-handle request type with the
+  single-shot method, so the wait member stays in it and the loop overwrites
+  it; the Python loop method leaves it out of its signature.
 - The cursor type name is not checked against the model names it shares a
   namespace with.
 - A stream reference's members are not checked against the SDK type's
@@ -282,3 +306,8 @@ the Python backend do the same, or should a caller keep reaching inside?
   Python swaps the SDK type in; the shipping `temporal_streams.nexusrpc.yaml`
   on sdk-python stays stock-parsable, so its `StreamRef` model is not
   marked and the front maps the wire model onto the SDK type by hand.
+- The SDK writes `null` for an unset reference member, and the generated
+  converter refuses an explicit `null` on a member not declared nullable,
+  so a marked model has to declare its optional members
+  `oneOf: [{type: string}, {type: "null"}]`; the loader refuses a plain
+  optional member on a marked model.
