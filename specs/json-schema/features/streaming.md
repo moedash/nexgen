@@ -1,17 +1,18 @@
 # Streaming annotations
 
-Source: not JSON Schema. Four generator extensions, in the same
+Source: not JSON Schema. Five generator extensions, in the same
 `x-`-prefixed family as [[properties]]'s `x-<lang>-name`.
 
-A stream endpoint is a request/response contract whose callers do four
+A stream endpoint is a request/response contract whose callers do five
 things the schema grammar cannot state. They carry an opaque resume
 token they must never parse. They carry payload bytes that a codec owns
 before the bytes leave the process. They poll one operation until it
-answers. And they hand a stream itself across an operation, as an input
-or a result, in a form the SDK on the other side opens directly. Without
-a way to say those four things, every language SDK writes the same
-wrapper around the generated bindings by hand, which is the state the
-annotations remove.
+answers. They hand a stream itself across an operation, as an input or a
+result, in a form the SDK on the other side opens directly. And they bind
+a stream's identity once and call the operations as methods on it.
+Without a way to say those five things, every language SDK writes the
+same wrapper around the generated bindings by hand, which is the state
+the annotations remove.
 
 | Keyword | Position | Value |
 |---|---|---|
@@ -19,6 +20,7 @@ annotations remove.
 | `x-nexus-payload` | a bytes-materialized node, or an array of them | `true` |
 | `x-nexus-long-poll` | an `operations:` entry | `{wait-field, result-field}` |
 | `x-nexus-stream-ref` | a `$defs` model | `true` |
+| `x-nexus-handle` | a `services:` entry | emitted handle type names to ordered wire-member lists |
 
 ## `x-nexus-cursor`
 
@@ -143,6 +145,61 @@ operation whose input or output is the reference serializes the same way
 whether the SDK or the generated converter does it. Go, TypeScript, Java
 and .NET emit the model unchanged.
 
+## `x-nexus-handle`
+
+```yaml
+services:
+  StreamService:
+    x-nexus-handle:
+      StreamHandle: [workflowId, stream]
+      StreamProducer: [workflowId, stream, producerId, attempt]
+```
+
+Maps an emitted handle type name to an ordered key set of **wire**
+members of the operations' inputs, resolved through each target's
+`x-<lang>-name` mapping like the long-poll members. An operation joins a
+handle when its input declares every key member; the handle carries it as
+a method with those members bound and the rest of the input as
+parameters. An operation missing a key stays off that handle. Membership
+is not exclusive: an operation whose input covers two key sets is a
+method on both handles.
+
+A handle whose key set extends another's is constructible from it by the
+keys it adds, so `handle.producer(producer_id, attempt)` falls out of the
+two sets above rather than being declared. Every handle is also
+constructible from the flat caller with all of its keys. The constructor
+is named after the handle: a trailing `Handle` is dropped (`StreamHandle`
+is built by `stream`), and from a parent handle the parent's own base is
+dropped as a prefix when something is left (`StreamProducer` from
+`StreamHandle` is `producer`; from the flat caller it is
+`stream_producer`). Each target cases the result its own way.
+
+A key member that is optional on the wire may be bound absent, and the
+handle sends what it holds. Binding is construction-time only; a handle
+carries no other state. The flat caller stays emitted, the handles are a
+projection over it, and nothing about the wire, the handler, or a caller
+that ignores the keyword changes. A long-poll loop method appears on the
+handle like any other operation method, minus the wait member the loop
+sets.
+
+The loader refuses what an emitter could not decide: a handle no
+operation joins, two handles over one key set, a key member the joining
+operations declare differently (a handle holds one value per key and
+sends it on every call), a key with one admissible value (`const`), a
+handle named like a model or a token type in the same file, and a
+constructor name that collides with an operation or with another
+constructor on the same object.
+
+Python emits one class per handle after the caller: `__init__` takes the
+caller and the keys, each operation method takes the free members as
+keyword parameters and posts through the caller, and constructors are
+methods on the caller and on parent handles. Go has one request struct
+per operation, so a handle method takes it whole and overwrites the bound
+fields before posting, which the doc comment says; constructors are
+methods on the caller and on parent handles. Both sit behind `--client`
+with the callers they project; the other targets accept the keyword and
+emit nothing for it.
+
 ## Rejection
 
 The keywords go through the loader's exact allowlist
@@ -161,6 +218,10 @@ act on an annotation still accepts it, so one contract stays portable.
 - The Python stream-reference alias is `render_stream_ref_alias` in
   `src/generator/json_schema/python.rs`, next to the model emitter it
   replaces for a marked model.
+- The handle projection is planned in `src/generator/json_schema/client.rs`
+  (`plan_handles`) from the key sets the loader lowered onto
+  `ServiceSpec::handles`, and rendered by the `render_handle*` functions
+  of the two caller emitters.
 - `src/generator/json_schema/client.rs` assembles the per-operation plan
   a caller emitter needs.
 - The rendering decisions live with their target, in
