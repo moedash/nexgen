@@ -632,7 +632,7 @@ fn render_handle_class(output: &mut String, service: &ClientService, handle: &Cl
             "self._client",
         );
     }
-    output.push_str("\n\n");
+    output.push('\n');
 }
 
 /// One operation as a handle method: the key members come off the handle, the
