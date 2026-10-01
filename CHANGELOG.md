@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Three streaming annotations for JSON Schema contracts: `x-nexus-cursor` on a
+  `type: string` node names an opaque resume token type, `x-nexus-payload` on a
+  bytes-materialized node marks payloads a caller's codec owns, and
+  `x-nexus-long-poll` on an `operations:` entry names the input member carrying
+  the wait hint and the output member whose emptiness ends a poll. Every target
+  accepts them so one contract stays portable; Go and Python act on them. See
+  `specs/json-schema/features/streaming.md` and `streaming-extensions.md`.
+- Go and Python emit a distinct token type for each `x-nexus-cursor` name, in
+  the model layer, with or without a generated caller. The wire models keep the
+  plain string.
+- A `--client` flag on the `go` and `python` generate subcommands emits an HTTP
+  caller per service, for a process outside the worker calling the Nexus HTTP
+  ingress. It is separate from the workflow-side `{Service}Client` the
+  `--native-api` surface emits. The caller takes an optional payload codec and
+  grows a looping method for each long-pollable operation. Requires the
+  `advanced` feature.
+
 ### Changed
 
 ### Deprecated

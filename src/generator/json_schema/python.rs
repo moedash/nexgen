@@ -427,6 +427,49 @@ impl ModelBackend {
             .iter()
             .any(|model| model.full_name == json_type.full_name)
     }
+
+    /// The HTTP caller's plan for this module. The models are the backend's own
+    /// resolved set, so the caller names the same types the models module
+    /// declares, hoisted ones included.
+    pub(in crate::generator) fn client_plan(
+        &self,
+        api_plan: &PlannedSpec,
+    ) -> crate::generator::json_schema::client::ClientPlan {
+        let models = self
+            .json_models
+            .iter()
+            .chain(self.hoisted_json_models.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        let resolved_names = models
+            .iter()
+            .map(|model| (model.full_name.clone(), model.model_name.clone()))
+            .collect();
+        crate::generator::json_schema::client::build_client_plan(
+            api_plan,
+            &models,
+            &resolved_names,
+            Language::Python,
+            &crate::generator::json_schema::client::ClientNaming {
+                service: &|service| {
+                    service
+                        .code_name
+                        .for_language(Language::Python)
+                        .unwrap_or(&service.name)
+                        .to_string()
+                },
+                operation: &|operation| {
+                    operation
+                        .code_name
+                        .for_language(Language::Python)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            crate::generator::python::python_field_name(&operation.name)
+                        })
+                },
+            },
+        )
+    }
 }
 
 #[derive(Debug, Default)]
@@ -832,7 +875,11 @@ pub(in crate::generator) fn render_external_models(
         push_section(&mut body);
         render_model_converter(&mut body, model, &schema, json_models)?;
         push_section(&mut body);
-        render_model_dataclass(&mut body, model, &schema)?;
+        if crate::json_schema::streaming::stream_ref_marked(&model.schema) {
+            render_stream_ref_alias(&mut body, model, &schema);
+        } else {
+            render_model_dataclass(&mut body, model, &schema)?;
+        }
     }
 
     // A `TypeAlias` cannot be decorated and `type[A | B]` is not a valid
@@ -906,9 +953,11 @@ pub(in crate::generator) fn render_external_models(
     let module_imports = BTreeSet::from([
         "temporalio.converter".to_string(),
         "temporalio.exceptions".to_string(),
+        "temporalio.streams".to_string(),
         "datetime".to_string(),
         "math".to_string(),
         "re".to_string(),
+        "typing".to_string(),
     ]);
     let mut relative_imports = BTreeMap::<String, BTreeSet<String>>::new();
     // Import exactly the runtime symbols the emitted body references. Longer
@@ -922,6 +971,12 @@ pub(in crate::generator) fn render_external_models(
     if !runtime_imports.is_empty() {
         relative_imports.insert(runtime_import_module.to_string(), runtime_imports);
     }
+    let cursor_names = crate::json_schema::streaming::cursor_type_names(
+        json_models.iter().map(|model| &model.schema),
+    );
+    if let Some(cursors) = render_cursor_types(&cursor_names) {
+        body.insert_str(0, &cursors);
+    }
     Ok(RenderedModelFragments {
         body,
         post_model_statements: String::new(),
@@ -931,6 +986,7 @@ pub(in crate::generator) fn render_external_models(
         exported_names: json_models
             .iter()
             .map(|model| model.model_name.clone())
+            .chain(cursor_names.iter().cloned())
             .collect(),
         module_exported_names: BTreeSet::new(),
         generated_names: Vec::new(),
@@ -938,6 +994,64 @@ pub(in crate::generator) fn render_external_models(
         declared_type_parameters: BTreeSet::new(),
         allows_private_wire_access: false,
     })
+}
+
+/// The SDK type a stream reference is emitted as (`x-nexus-stream-ref`).
+const PYTHON_STREAM_REF_TYPE: &str = "temporalio.streams.StreamRef";
+
+/// Emits a stream-reference model as the SDK's own type rather than a wire
+/// dataclass, so an operation that takes or returns one hands the caller the
+/// value `client.get_stream_handle()` opens, with no copy in between.
+///
+/// The model's converter is still emitted and still owns the wire form: it
+/// builds the SDK type from the declared members by keyword and reads them back
+/// by attribute, which is why the loader requires the model to declare them.
+/// Only the class body is replaced, so a member typed by the model, and an
+/// operation whose input or output is the model, name the alias unchanged.
+fn render_stream_ref_alias(output: &mut String, model: &PlannedJsonType, schema: &Schema) {
+    output.push_str(&model.model_name);
+    output.push_str(": typing.TypeAlias = ");
+    output.push_str(PYTHON_STREAM_REF_TYPE);
+    output.push('\n');
+    render_python_docstring(
+        output,
+        "",
+        compose_python_doc(schema.title.as_deref(), schema.description.as_deref()).as_deref(),
+        &[],
+        None,
+        false,
+    );
+}
+
+/// The opaque token types the contract declares (`x-nexus-cursor`), emitted
+/// ahead of the models so a caller can import them from the models module.
+///
+/// `NewType` rather than a type alias: a caller holding a token in a variable of
+/// this type cannot pass a bare `str` into its place, which is the whole point
+/// of an opaque token. The wire models keep `str`, so the JSON on the wire is
+/// unchanged.
+fn render_cursor_types(cursor_names: &[String]) -> Option<String> {
+    if cursor_names.is_empty() {
+        return None;
+    }
+    let mut output = String::new();
+    for name in cursor_names {
+        output.push_str(name);
+        output.push_str(" = typing.NewType(");
+        output.push_str(&python_string_literal(name));
+        output.push_str(", str)\n");
+        render_python_docstring(
+            &mut output,
+            "",
+            Some(&crate::json_schema::streaming::cursor_doc(name, "\n\n")),
+            &[],
+            None,
+            false,
+        );
+        output.push('\n');
+    }
+    output.push('\n');
+    Some(output)
 }
 
 /// The runtime symbols a generated model module may import from `_definitions`.

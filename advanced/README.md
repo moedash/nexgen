@@ -19,8 +19,9 @@ The generator picks its input format from the file extension, so the same
 
 > [!IMPORTANT]
 > Everything on this page — the `dotnet` target, the `--support-file`,
-> `--descriptors`, `--format`, and `--native-api` flags, and the `add-rpc` and
-> `debug-wit-dir` subcommands — is
+> `--descriptors`, `--format`, and `--native-api` flags, the `--client` flag on
+> `go` and `python` ([streaming-extensions.md](../streaming-extensions.md)), and
+> the `add-rpc` and `debug-wit-dir` subcommands — is
 > gated behind the `advanced` Cargo feature, which is off by default. Build or
 > run with `--features advanced` (as every command below does), or produce a
 > binary that includes it with `cargo build --release --features advanced`.

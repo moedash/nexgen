@@ -26,6 +26,7 @@ use crate::spec::{
 use crate::spec::{ApiSpecBranch, ApiSpecLeaf, ApiSpecNode, ApiSpecTree};
 
 use super::json_schema::go as json;
+use super::json_schema::go_client;
 use super::proto::go as proto;
 
 type FunctionArgsSpec = GenericFunctionArgsSpec<PlannedFamily>;
@@ -690,6 +691,13 @@ fn generate_single_leaf(
             json::render_definitions_file(&package_name, &tree_models)?,
             GeneratedFileOrigin::fixed("generated Go validation runtime"),
         )?;
+        if let Some(client_source) = render_go_client_file(&[leaf], &tree_models, &package_name)? {
+            generated.files.insert(
+                PathBuf::from(go_client::CLIENT_FILE),
+                client_source,
+                GeneratedFileOrigin::fixed("generated Go HTTP caller"),
+            )?;
+        }
     }
     Ok(GeneratedFiles {
         layout: crate::generator::GeneratedOutputLayout::Directory,
@@ -760,6 +768,14 @@ fn generate_branch_tree(
         )?;
     }
 
+    if let Some(client_source) = render_go_client_file(&leaves, &tree_models, &package_name)? {
+        files.insert(
+            PathBuf::from(go_client::CLIENT_FILE),
+            client_source,
+            GeneratedFileOrigin::fixed("generated Go HTTP caller"),
+        )?;
+    }
+
     // Hand-written support fragments (rare for JSON inputs) are emitted once.
     let support_fragments = support_fragments_for_plans(&leaves, support);
     if !support_fragments.is_empty() {
@@ -775,6 +791,27 @@ fn generate_branch_tree(
         files: files.into_files(),
         warnings,
     })
+}
+
+/// Renders the closure's one HTTP caller file, or `None` when `--client` is off
+/// or no input file declares a service.
+///
+/// Go flattens the closure into one package, so every input file's services
+/// share one caller file, the same way they share `definitions.go`.
+fn render_go_client_file(
+    leaves: &[&ApiSpecLeaf<PlannedFamily>],
+    tree_models: &[PlannedJsonType],
+    package_name: &str,
+) -> Result<Option<String>> {
+    if !crate::nexgen_config::current().client {
+        return Ok(None);
+    }
+    let mut plan = crate::generator::json_schema::client::ClientPlan::default();
+    for leaf in leaves {
+        plan.services
+            .extend(json::client_plan(&leaf.spec, tree_models)?.services);
+    }
+    Ok(go_client::render_client_file(package_name, &plan))
 }
 
 /// Flattens an input file's module path into its `<module>.go` file name in the
