@@ -304,3 +304,8 @@ the Python backend do the same, or should a caller keep reaching inside?
   Python swaps the SDK type in; the shipping `temporal_streams.nexusrpc.yaml`
   on sdk-python stays stock-parsable, so its `StreamRef` model is not
   marked and the front maps the wire model onto the SDK type by hand.
+- The SDK writes `null` for an unset reference member, and the generated
+  converter refuses an explicit `null` on a member not declared nullable,
+  so a marked model declares its optional members
+  `oneOf: [{type: string}, {type: "null"}]`. The loader does not require
+  that yet; the live demo's contract does it by hand.

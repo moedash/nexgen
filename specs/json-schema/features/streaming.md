@@ -142,8 +142,12 @@ in place of the dataclass and imports `temporalio.streams`. The model's
 converter is emitted as for any model and owns the wire form in both
 directions. The SDK type's own JSON encoding is the same members, so an
 operation whose input or output is the reference serializes the same way
-whether the SDK or the generated converter does it. Go, TypeScript, Java
-and .NET emit the model unchanged.
+whether the SDK or the generated converter does it, with one condition:
+the SDK writes `null` for an unset member, and an optional member that is
+not declared nullable refuses an explicit `null` ([[nullability]]), so a
+marked model declares its optional members
+`oneOf: [{type: string}, {type: "null"}]`. Go, TypeScript, Java and .NET
+emit the model unchanged.
 
 ## `x-nexus-handle`
 
