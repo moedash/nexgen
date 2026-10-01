@@ -3102,7 +3102,7 @@ fn collect_imports_from_planned_value(value: &PlannedValueType, imports: &mut BT
 }
 
 /// Returns `true` if `name` is a Go language keyword.
-fn is_go_keyword(name: &str) -> bool {
+pub(in crate::generator) fn is_go_keyword(name: &str) -> bool {
     matches!(
         name,
         "break"

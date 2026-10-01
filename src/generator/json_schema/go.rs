@@ -1873,7 +1873,20 @@ pub(in crate::generator) fn client_plan(
         .iter()
         .map(|model| (model.full_name.clone(), model.model_name.clone()))
         .collect();
-    Ok(build_client_plan(
+    // The same two forms the struct emitter resolves a `$ref` through, so a
+    // handle key typed by a model names the struct the models file declares.
+    let mut model_names = cross_module_names.clone();
+    for model in &models {
+        model_names.insert(model.full_name.clone(), model.model_name.clone());
+        model_names.insert(
+            format!("#/$defs/{}", model.full_name),
+            model.model_name.clone(),
+        );
+    }
+    let member = |property: &Value, required: bool| -> Result<String> {
+        member_go_type(property, required, &model_names)
+    };
+    build_client_plan(
         api_plan,
         &models,
         &resolved_names,
@@ -1893,8 +1906,9 @@ pub(in crate::generator) fn client_plan(
                     .map(str::to_string)
                     .unwrap_or_else(|| go_field_name(&operation.name))
             },
+            member: &member,
         },
-    ))
+    )
 }
 
 /// The opaque token types the contract declares (`x-nexus-cursor`).
@@ -5747,6 +5761,21 @@ fn go_map_shape(
         element_type: "json.RawMessage".to_string(),
         element: GoMapElement::Raw,
     }))
+}
+
+/// The field type a member takes on a generated struct, for a handle that
+/// binds the member or takes it as a parameter: the models file's own rule.
+pub(in crate::generator) fn member_go_type(
+    property: &Value,
+    required: bool,
+    model_names: &BTreeMap<String, String>,
+) -> Result<String> {
+    let schema: Schema =
+        serde_json::from_value(property.clone()).map_err(|error| Error::InvalidJsonSchema {
+            path: PathBuf::from("<go-client>"),
+            reason: format!("failed to read a handle member's schema: {error}"),
+        })?;
+    go_property_type("Handle", "", &schema, required, model_names)
 }
 
 fn go_property_type(

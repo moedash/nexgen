@@ -10,7 +10,8 @@ use heck::ToShoutySnakeCase;
 use serde_json::Value;
 
 use crate::generator::json_schema::client::{
-    ClientLongPoll, ClientModel, ClientOperation, ClientPlan, ClientService,
+    ClientHandle, ClientHandleKey, ClientLongPoll, ClientModel, ClientOperation, ClientPlan,
+    ClientService,
 };
 use crate::generator::json_schema::python::converter_class_name;
 use crate::generator::python::{python_field_name, render_generated_file_header};
@@ -104,6 +105,9 @@ pub(in crate::generator) fn render_client_module(plan: &ClientPlan) -> Option<St
         // when a sibling service in the same module has one.
         let codec = service.operations.iter().any(ClientOperation::has_payloads);
         render_service_client(&mut output, service, codec);
+        for handle in &service.handles {
+            render_handle_class(&mut output, service, handle);
+        }
     }
     Some(output)
 }
@@ -446,7 +450,287 @@ fn render_service_client(output: &mut String, service: &ClientService, codec: bo
             render_long_poll_method(output, operation, long_poll, input, model_output);
         }
     }
+    for handle in &service.handles {
+        output.push('\n');
+        render_handle_constructor(output, handle, None, &handle.constructor_base, "self");
+    }
     output.push('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Handle projection (`x-nexus-handle`)
+// ---------------------------------------------------------------------------
+
+fn key_attribute(key: &ClientHandleKey) -> String {
+    member_attribute(Some(&key.property), &key.wire_name)
+}
+
+fn key_takes_default(key: &ClientHandleKey) -> bool {
+    !key.required || key.property.get("default").is_some()
+}
+
+fn constructor_name(base: &str) -> String {
+    python_field_name(base)
+}
+
+/// The constructor of `target` emitted on the flat caller (`parent` is `None`)
+/// or on a parent handle, which already holds every key but `extra`.
+///
+/// `client_expr` is how the body reaches the flat caller from where the method
+/// sits: `self` on the caller itself, `self._client` on a handle.
+fn render_handle_constructor(
+    output: &mut String,
+    target: &ClientHandle,
+    parent: Option<(&ClientHandle, &[usize])>,
+    base: &str,
+    client_expr: &str,
+) {
+    let taken: Vec<&ClientHandleKey> = match parent {
+        Some((_, extra)) => extra.iter().map(|index| &target.keys[*index]).collect(),
+        None => target.keys.iter().collect(),
+    };
+    output.push_str("    def ");
+    output.push_str(&constructor_name(base));
+    output.push_str("(\n        self,\n");
+    if !taken.is_empty() {
+        output.push_str("        *,\n");
+    }
+    for key in &taken {
+        output.push_str("        ");
+        output.push_str(&key_attribute(key));
+        output.push_str(": ");
+        output.push_str(&key.type_name);
+        if key_takes_default(key) {
+            output.push_str(" = None");
+        }
+        output.push_str(",\n");
+    }
+    output.push_str("    ) -> \"");
+    output.push_str(&target.name);
+    output.push_str("\":\n");
+    let bound = target
+        .keys
+        .iter()
+        .map(|key| format!("`{}`", key.wire_name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    render_docstring(
+        output,
+        "        ",
+        &[match parent {
+            Some(_) => format!(
+                "A `{}` bound to {bound}: this handle's own members and the ones given here.",
+                target.name
+            ),
+            None => format!("A `{}` bound to {bound}.", target.name),
+        }],
+    );
+    output.push_str("        return ");
+    output.push_str(&target.name);
+    output.push_str("(\n            ");
+    output.push_str(client_expr);
+    output.push_str(",\n");
+    for key in &target.keys {
+        let attribute = key_attribute(key);
+        output.push_str("            ");
+        output.push_str(&attribute);
+        output.push('=');
+        if taken.iter().any(|given| given.wire_name == key.wire_name) {
+            output.push_str(&attribute);
+        } else {
+            output.push_str("self._");
+            output.push_str(&attribute);
+        }
+        output.push_str(",\n");
+    }
+    output.push_str("        )\n");
+}
+
+fn render_handle_class(output: &mut String, service: &ClientService, handle: &ClientHandle) {
+    let client_class = client_class_name(service);
+    output.push_str("\nclass ");
+    output.push_str(&handle.name);
+    output.push_str(":\n");
+    let bound = handle
+        .keys
+        .iter()
+        .map(|key| format!("`{}`", key.wire_name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    render_docstring(
+        output,
+        "    ",
+        &[
+            format!("Binds {bound} for the {} service.", service.wire_name),
+            format!(
+                "Every method posts through the `{client_class}` it was built from with the \
+                 bound members filled in, so a caller states a stream's identity once. The \
+                 flat caller stays available for a call that spells every member out."
+            ),
+        ],
+    );
+    output.push_str("\n    def __init__(\n        self,\n        client: ");
+    output.push_str(&client_class);
+    output.push_str(",\n");
+    if !handle.keys.is_empty() {
+        output.push_str("        *,\n");
+    }
+    for key in &handle.keys {
+        output.push_str("        ");
+        output.push_str(&key_attribute(key));
+        output.push_str(": ");
+        output.push_str(&key.type_name);
+        if key_takes_default(key) {
+            output.push_str(" = None");
+        }
+        output.push_str(",\n");
+    }
+    output.push_str("    ) -> None:\n");
+    // Annotated explicitly: a target's strict type checker asks for it on a
+    // class it cannot prove closed.
+    output.push_str("        self._client: ");
+    output.push_str(&client_class);
+    output.push_str(" = client\n");
+    for key in &handle.keys {
+        let attribute = key_attribute(key);
+        output.push_str("        self._");
+        output.push_str(&attribute);
+        output.push_str(": ");
+        output.push_str(&key.type_name);
+        output.push_str(" = ");
+        output.push_str(&attribute);
+        output.push('\n');
+    }
+
+    for index in &handle.operations {
+        let operation = &service.operations[*index];
+        let Some(input) = &operation.input else {
+            continue;
+        };
+        output.push('\n');
+        render_handle_method(output, handle, operation, input, None);
+        if let Some(long_poll) = &operation.long_poll
+            && let Some(model_output) = &operation.output
+        {
+            output.push('\n');
+            render_handle_method(
+                output,
+                handle,
+                operation,
+                input,
+                Some((long_poll, model_output)),
+            );
+        }
+    }
+    for child in &handle.children {
+        output.push('\n');
+        render_handle_constructor(
+            output,
+            &service.handles[child.handle],
+            Some((handle, &child.extra_keys)),
+            &child.constructor_base,
+            "self._client",
+        );
+    }
+    output.push_str("\n\n");
+}
+
+/// One operation as a handle method: the key members come off the handle, the
+/// rest stay as keyword parameters, and the call goes through the flat caller
+/// so codec and transport live in one place. With `long_poll` it is the loop
+/// method, whose wait member the loop sets, so it takes no parameter for it.
+fn render_handle_method(
+    output: &mut String,
+    handle: &ClientHandle,
+    operation: &ClientOperation,
+    input: &ClientModel,
+    long_poll: Option<(&ClientLongPoll, &ClientModel)>,
+) {
+    let method = match long_poll {
+        Some((long_poll, model_output)) => {
+            long_poll_method_name(operation, long_poll, model_output)
+        }
+        None => operation.name.clone(),
+    };
+    let wait_member = long_poll.map(|(long_poll, _)| long_poll.wait_member.as_str());
+    let free: Vec<(&str, &Value)> = input
+        .members()
+        .into_iter()
+        .filter(|(wire, _)| {
+            !handle.binds(wire) && !input.member_is_const(wire) && Some(*wire) != wait_member
+        })
+        .collect();
+    let return_annotation = operation
+        .output
+        .as_ref()
+        .map(|model| model.type_name.clone())
+        .unwrap_or_else(|| "None".to_string());
+
+    output.push_str("    async def ");
+    output.push_str(&method);
+    output.push_str("(\n        self,\n");
+    if !free.is_empty() || long_poll.is_some() {
+        output.push_str("        *,\n");
+    }
+    for (wire, member) in &free {
+        output.push_str("        ");
+        output.push_str(&member_attribute(Some(member), wire));
+        output.push_str(": ");
+        output.push_str(&input.member_type(wire).unwrap_or_default());
+        if input.member_takes_default(wire) {
+            output.push_str(" = None");
+        }
+        output.push_str(",\n");
+    }
+    if long_poll.is_some() {
+        output.push_str("        deadline: float,\n");
+    }
+    output.push_str("    ) -> ");
+    output.push_str(&return_annotation);
+    output.push_str(":\n");
+    let mut lines = Vec::new();
+    if let Some(doc) = &operation.doc {
+        lines.push(doc.clone());
+    }
+    lines.push(format!(
+        "The bound {} come from this handle; the flat caller's `{method}` takes them spelled out.",
+        handle
+            .keys
+            .iter()
+            .map(|key| format!("`{}`", key.wire_name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    if operation.deprecated {
+        lines.push("This operation is deprecated.".to_string());
+    }
+    render_docstring(output, "        ", &lines);
+    output.push_str("        return await self._client.");
+    output.push_str(&method);
+    output.push_str("(\n            ");
+    output.push_str(&input.type_name);
+    output.push_str("(\n");
+    for key in &handle.keys {
+        let attribute = key_attribute(key);
+        output.push_str("                ");
+        output.push_str(&attribute);
+        output.push_str("=self._");
+        output.push_str(&attribute);
+        output.push_str(",\n");
+    }
+    for (wire, member) in &free {
+        let attribute = member_attribute(Some(member), wire);
+        output.push_str("                ");
+        output.push_str(&attribute);
+        output.push('=');
+        output.push_str(&attribute);
+        output.push_str(",\n");
+    }
+    output.push_str("            )");
+    if long_poll.is_some() {
+        output.push_str(",\n            deadline=deadline");
+    }
+    output.push_str(",\n        )\n");
 }
 
 fn render_operation_method(output: &mut String, operation: &ClientOperation) {

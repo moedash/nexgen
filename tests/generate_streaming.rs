@@ -1117,3 +1117,269 @@ fn a_marked_inline_object_is_hoisted_into_the_stream_reference() {
     assert!(!models.contains("class ReadInputStream"), "{models}");
     fs::remove_dir_all(temp_dir).unwrap();
 }
+
+/// The stream contract with two handles: one over the stream's identity and
+/// one that adds the producer's, so the second is built from the first.
+const HANDLE_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  StreamService:
+    fqn: example.streams.v1.StreamService
+    x-nexus-handle:
+      StreamHandle: [workflowId, stream]
+      StreamProducer: [workflowId, stream, producerId, attempt]
+    operations:
+      append:
+        fqn: append
+        input: { $ref: "#/$defs/AppendInput" }
+        output: { $ref: "#/$defs/AppendOutput" }
+      read:
+        fqn: read
+        x-nexus-long-poll:
+          wait-field: waitMs
+          result-field: records
+        input: { $ref: "#/$defs/ReadInput" }
+        output: { $ref: "#/$defs/ReadOutput" }
+      ping:
+        fqn: ping
+$defs:
+  AppendInput:
+    type: object
+    properties:
+      workflowId: { type: string }
+      stream: { type: string }
+      producerId: { type: string }
+      attempt: { type: integer, minimum: 1 }
+      batchIndex: { type: integer, minimum: 1 }
+      payloads:
+        type: array
+        items: { type: string, contentEncoding: base64 }
+        x-nexus-payload: true
+      finish: { type: boolean }
+    required: [workflowId, stream, producerId, attempt, batchIndex]
+    additionalProperties: false
+  AppendOutput:
+    type: object
+    properties:
+      cursor: { type: string, x-nexus-cursor: StreamCursor }
+    additionalProperties: false
+  ReadInput:
+    type: object
+    properties:
+      workflowId: { type: string }
+      stream: { type: string }
+      afterToken: { type: string, x-nexus-cursor: StreamCursor }
+      waitMs: { type: integer, minimum: 0 }
+    required: [workflowId, stream]
+    additionalProperties: false
+  ReadOutput:
+    type: object
+    properties:
+      records: { type: array, items: { type: string } }
+      nextToken: { type: string, x-nexus-cursor: StreamCursor }
+    additionalProperties: false
+"##;
+
+#[test]
+fn python_projects_handles_over_the_flat_caller() {
+    let (temp_dir, files) = generate(
+        Language::Python,
+        HANDLE_CONTRACT,
+        true,
+        "streaming-python-handles",
+    );
+    let client = file(&files, "client.py");
+    // The flat caller stays, and builds every handle from all of its keys.
+    assert!(
+        client.contains("    async def read(\n        self,\n        request: ReadInput,"),
+        "{client}"
+    );
+    assert!(client.contains("    def stream(\n        self,\n        *,\n        workflow_id: str,\n        stream: str,\n    ) -> \"StreamHandle\":"), "{client}");
+    assert!(client.contains("    def stream_producer(\n"), "{client}");
+    // A joined operation drops the bound members and injects them.
+    assert!(client.contains("class StreamHandle:"), "{client}");
+    let handle = client
+        .split("class StreamHandle:")
+        .nth(1)
+        .and_then(|rest| rest.split("class StreamProducer:").next())
+        .unwrap_or_default();
+    assert!(handle.contains("    async def read(\n        self,\n        *,\n        after_token: str | None = None,\n        wait_ms: int | None = None,\n    ) -> ReadOutput:"), "{handle}");
+    assert!(handle.contains("workflow_id=self._workflow_id,\n                stream=self._stream,\n                after_token=after_token,"), "{handle}");
+    // The loop method rides along and leaves the wait member to the loop.
+    assert!(handle.contains("    async def read_until_records(\n        self,\n        *,\n        after_token: str | None = None,\n        deadline: float,\n    ) -> ReadOutput:"), "{handle}");
+    assert!(handle.contains("deadline=deadline,"), "{handle}");
+    // The producer is built from the handle by the keys it adds, named after
+    // the part of its name the parent does not already say.
+    assert!(handle.contains("    def producer(\n        self,\n        *,\n        producer_id: str,\n        attempt: int,\n    ) -> \"StreamProducer\":"), "{handle}");
+    assert!(handle.contains("            self._client,\n            workflow_id=self._workflow_id,\n            stream=self._stream,\n            producer_id=producer_id,\n            attempt=attempt,"), "{handle}");
+    // An operation without the keys stays off the handle.
+    assert!(!handle.contains("def ping("), "{handle}");
+    // The producer carries append with its own keys bound, and nothing else.
+    let producer = client
+        .split("class StreamProducer:")
+        .nth(1)
+        .unwrap_or_default();
+    assert!(producer.contains("    async def append(\n        self,\n        *,\n        batch_index: int,\n        payloads: list[bytes] | None = None,\n        finish: bool | None = None,\n    ) -> AppendOutput:"), "{producer}");
+    assert!(!producer.contains("def read("), "{producer}");
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn python_models_carry_no_handle_without_a_client() {
+    // The projection is client-side only: the models module and the service
+    // definition do not change when a contract declares handles.
+    let (temp_dir, files) = generate(
+        Language::Python,
+        HANDLE_CONTRACT,
+        false,
+        "streaming-python-handles-models",
+    );
+    assert!(!has_file(&files, "client.py"));
+    for (name, contents) in &files {
+        assert!(
+            !contents.contains("StreamHandle"),
+            "{name} carries the handle"
+        );
+        assert!(
+            !contents.contains("x-nexus-"),
+            "{name} leaked an annotation keyword"
+        );
+    }
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn go_projects_handles_over_the_flat_caller() {
+    let (temp_dir, files) = generate(Language::Go, HANDLE_CONTRACT, true, "streaming-go-handles");
+    let client = file(&files, "client.go");
+    assert!(client.contains("type StreamHandle struct {\n\tclient *StreamServiceHTTPClient\n\tworkflowID string\n\tstream string\n}"), "{client}");
+    assert!(client.contains("func (c *StreamServiceHTTPClient) Stream(workflowID string, stream string) *StreamHandle {"), "{client}");
+    assert!(client.contains("func (c *StreamServiceHTTPClient) StreamProducer(workflowID string, stream string, producerID string, attempt int64) *StreamProducer {"), "{client}");
+    // Go has one request struct per operation, so the handle method takes it
+    // whole and overwrites the bound fields before posting.
+    assert!(client.contains("func (h *StreamHandle) Read(ctx context.Context, request ReadInput) (ReadOutput, error) {\n\trequest.WorkflowID = h.workflowID\n\trequest.Stream = h.stream\n\treturn h.client.Read(ctx, request)\n}"), "{client}");
+    assert!(client.contains("func (h *StreamHandle) ReadUntilRecords(ctx context.Context, request ReadInput, deadline time.Duration) (ReadOutput, error) {"), "{client}");
+    assert!(
+        client.contains(
+            "func (h *StreamHandle) Producer(producerID string, attempt int64) *StreamProducer {"
+        ),
+        "{client}"
+    );
+    assert!(client.contains("func (h *StreamProducer) Append(ctx context.Context, request AppendInput) (AppendOutput, error) {\n\trequest.WorkflowID = h.workflowID\n\trequest.Stream = h.stream\n\trequest.ProducerID = h.producerID\n\trequest.Attempt = h.attempt\n"), "{client}");
+    assert!(!client.contains("func (h *StreamHandle) Ping("), "{client}");
+    fs::remove_dir_all(temp_dir).unwrap();
+}
+
+#[test]
+fn the_other_targets_ignore_the_handle_keyword() {
+    for language in [Language::TypeScript, Language::Java] {
+        let temp_dir = unique_output_path("streaming-other-targets-handles");
+        let input_dir = temp_dir.join("input");
+        fs::create_dir_all(&input_dir).unwrap();
+        let input_path = input_dir.join("streams.nexusrpc.yaml");
+        fs::write(&input_path, HANDLE_CONTRACT).unwrap();
+        let output_path = temp_dir.join("streams");
+        generate_to_file(&GenerateRequest {
+            config: NexgenConfig::default(),
+            language,
+            input_paths: vec![input_path],
+            support_paths: Vec::new(),
+            descriptor_paths: Vec::new(),
+            output_path: output_path.clone(),
+            format: false,
+            java_package_name: (language == Language::Java)
+                .then(|| "json_schema.streams".to_string()),
+            ts_date_time_types: Default::default(),
+        })
+        .unwrap_or_else(|error| panic!("{language:?} should generate: {error}"));
+        for (name, contents) in read_files(&output_path) {
+            assert!(
+                !contents.contains("x-nexus-"),
+                "{language:?} {name} leaked an annotation keyword"
+            );
+            assert!(
+                !contents.contains("StreamHandle"),
+                "{language:?} {name} emitted a handle"
+            );
+        }
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+}
+
+fn handle_variant(handles: &str) -> String {
+    HANDLE_CONTRACT.replace(
+        "    x-nexus-handle:\n      StreamHandle: [workflowId, stream]\n      StreamProducer: [workflowId, stream, producerId, attempt]\n",
+        handles,
+    )
+}
+
+#[test]
+fn a_handle_nothing_joins_is_refused() {
+    let message = refusal(
+        &handle_variant("    x-nexus-handle:\n      Orphan: [workflowId, finish, afterToken]\n"),
+        "streaming-handle-orphan",
+    );
+    assert!(message.contains("handle `Orphan` binds [workflowId, finish, afterToken], which no operation's input carries in full"), "{message}");
+}
+
+#[test]
+fn two_handles_over_one_key_set_are_refused() {
+    let message = refusal(
+        &handle_variant(
+            "    x-nexus-handle:\n      StreamHandle: [workflowId, stream]\n      Twin: [stream, workflowId]\n",
+        ),
+        "streaming-handle-twins",
+    );
+    assert!(
+        message.contains("handles `StreamHandle` and `Twin` bind the same members"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_key_declared_two_ways_is_refused() {
+    // `attempt` is required on append; the variant adds it optional on read.
+    let contract = handle_variant("    x-nexus-handle:\n      Attempt: [attempt]\n").replace(
+        "      afterToken: { type: string, x-nexus-cursor: StreamCursor }\n",
+        "      afterToken: { type: string, x-nexus-cursor: StreamCursor }\n      attempt: { type: integer, minimum: 1 }\n",
+    );
+    let message = refusal(&contract, "streaming-handle-two-ways");
+    assert!(message.contains("handle `Attempt` binds `attempt`, which operations `append` and `read` declare differently"), "{message}");
+}
+
+#[test]
+fn a_handle_named_like_a_model_or_an_operation_is_refused() {
+    let message = refusal(
+        &handle_variant("    x-nexus-handle:\n      ReadInput: [workflowId]\n"),
+        "streaming-handle-model-name",
+    );
+    assert!(
+        message.contains("name `ReadInput` is already a model in this file"),
+        "{message}"
+    );
+    let message = refusal(
+        &handle_variant("    x-nexus-handle:\n      Read: [workflowId]\n"),
+        "streaming-handle-operation-name",
+    );
+    assert!(
+        message.contains("handle `Read` would be built by `Read`, which is also an operation"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_handle_list_has_to_name_members() {
+    let message = refusal(
+        &handle_variant("    x-nexus-handle:\n      StreamHandle: workflowId\n"),
+        "streaming-handle-grammar",
+    );
+    assert!(
+        message.contains("`x-nexus-handle.StreamHandle` must be a list of wire member names"),
+        "{message}"
+    );
+    let message = refusal(
+        &handle_variant("    x-nexus-handle:\n      StreamHandle: [workflowId, workflowId]\n"),
+        "streaming-handle-twice",
+    );
+    assert!(message.contains("lists `workflowId` twice"), "{message}");
+}

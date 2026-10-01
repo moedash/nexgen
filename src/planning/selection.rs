@@ -157,6 +157,7 @@ mod tests {
                 experimental: false,
                 deprecated: false,
                 delay_load_temporalio_workflow: false,
+                handles: Vec::new(),
                 operations: Vec::new(),
                 resources: Vec::new(),
                 data: (),

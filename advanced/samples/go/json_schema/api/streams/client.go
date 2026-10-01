@@ -408,3 +408,88 @@ func (c *StreamServiceHTTPClient) ReadUntilRecords(ctx context.Context, request 
 		}
 	}
 }
+
+// WorkflowStreams binds workflowId for the example.streams.v1.StreamService service.
+// Every method posts through the StreamServiceHTTPClient it was built from with the
+// bound members filled in, so a caller states a stream's identity once. The flat caller
+// stays available for a call that spells every member out.
+type WorkflowStreams struct {
+	client     *StreamServiceHTTPClient
+	workflowID string
+}
+
+// WorkflowStreams binds workflowId into a WorkflowStreams.
+func (c *StreamServiceHTTPClient) WorkflowStreams(workflowID string) *WorkflowStreams {
+	return &WorkflowStreams{
+		client:     c,
+		workflowID: workflowID,
+	}
+}
+
+// Append posts through the caller with the bound WorkflowID filled in from this handle,
+// replacing whatever request carries in those fields.
+func (h *WorkflowStreams) Append(ctx context.Context, request AppendInput) (AppendOutput, error) {
+	request.WorkflowID = h.workflowID
+	return h.client.Append(ctx, request)
+}
+
+// Read posts through the caller with the bound WorkflowID filled in from this handle,
+// replacing whatever request carries in those fields.
+func (h *WorkflowStreams) Read(ctx context.Context, request ReadInput) (ReadOutput, error) {
+	request.WorkflowID = h.workflowID
+	return h.client.Read(ctx, request)
+}
+
+// ReadUntilRecords posts through the caller with the bound WorkflowID filled in from
+// this handle, replacing whatever request carries in those fields.
+func (h *WorkflowStreams) ReadUntilRecords(ctx context.Context, request ReadInput, deadline time.Duration) (ReadOutput, error) {
+	request.WorkflowID = h.workflowID
+	return h.client.ReadUntilRecords(ctx, request, deadline)
+}
+
+// StreamProducer binds workflowId, stream, producerId, attempt into a StreamProducer:
+// this handle's own members and the ones given here.
+func (h *WorkflowStreams) StreamProducer(stream string, producerID string, attempt int64) *StreamProducer {
+	return &StreamProducer{
+		client:     h.client,
+		workflowID: h.workflowID,
+		stream:     stream,
+		producerID: producerID,
+		attempt:    attempt,
+	}
+}
+
+// StreamProducer binds workflowId, stream, producerId, attempt for the
+// example.streams.v1.StreamService service. Every method posts through the
+// StreamServiceHTTPClient it was built from with the bound members filled in, so a
+// caller states a stream's identity once. The flat caller stays available for a call
+// that spells every member out.
+type StreamProducer struct {
+	client     *StreamServiceHTTPClient
+	workflowID string
+	stream     string
+	producerID string
+	attempt    int64
+}
+
+// StreamProducer binds workflowId, stream, producerId, attempt into a StreamProducer.
+func (c *StreamServiceHTTPClient) StreamProducer(workflowID string, stream string, producerID string, attempt int64) *StreamProducer {
+	return &StreamProducer{
+		client:     c,
+		workflowID: workflowID,
+		stream:     stream,
+		producerID: producerID,
+		attempt:    attempt,
+	}
+}
+
+// Append posts through the caller with the bound WorkflowID, Stream, ProducerID,
+// Attempt filled in from this handle, replacing whatever request carries in those
+// fields.
+func (h *StreamProducer) Append(ctx context.Context, request AppendInput) (AppendOutput, error) {
+	request.WorkflowID = h.workflowID
+	request.Stream = h.stream
+	request.ProducerID = h.producerID
+	request.Attempt = h.attempt
+	return h.client.Append(ctx, request)
+}

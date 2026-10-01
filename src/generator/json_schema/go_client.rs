@@ -10,10 +10,12 @@ use heck::ToLowerCamelCase;
 use serde_json::Value;
 
 use crate::generator::go::{
-    GENERATED_HEADER, go_field_name, render_go_doc_comment as render_wrapped_go_doc_comment,
+    GENERATED_HEADER, go_field_name, is_go_keyword,
+    render_go_doc_comment as render_wrapped_go_doc_comment,
 };
 use crate::generator::json_schema::client::{
-    ClientLongPoll, ClientModel, ClientOperation, ClientPlan, ClientService,
+    ClientHandle, ClientHandleKey, ClientLongPoll, ClientModel, ClientOperation, ClientPlan,
+    ClientService,
 };
 use crate::json_schema::content_encoding::Encoding;
 use crate::json_schema::streaming::PayloadStep;
@@ -100,8 +102,239 @@ pub(in crate::generator) fn render_client_file(
         // when a sibling service in the same module has one.
         let codec = service.operations.iter().any(ClientOperation::has_payloads);
         render_service_client(&mut output, service, codec);
+        for handle in &service.handles {
+            render_handle(&mut output, service, handle);
+        }
     }
     Some(output)
+}
+
+// ---------------------------------------------------------------------------
+// Handle projection (`x-nexus-handle`)
+// ---------------------------------------------------------------------------
+
+/// The struct field a key is stored under on the handle: the model's field
+/// name with its first letter lowered, so it is unexported and reads like the
+/// member it mirrors.
+fn key_field(key: &ClientHandleKey) -> String {
+    local_name(&member_field(Some(&key.property), &key.wire_name))
+}
+
+/// A parameter or field name derived from an exported field name. A Go keyword
+/// takes a suffix rather than a leading underscore, which gofmt frowns on.
+fn local_name(field: &str) -> String {
+    let mut chars = field.chars();
+    let mut name = match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect::<String>(),
+        None => String::new(),
+    };
+    if is_go_keyword(&name) || name == "client" {
+        name.push_str("Value");
+    }
+    name
+}
+
+fn constructor_name(base: &str) -> String {
+    go_field_name(base)
+}
+
+/// The constructor of `target` emitted on the flat caller (`parent` is `None`)
+/// or on a parent handle, which already holds every key but `extra`.
+fn render_handle_constructor(
+    output: &mut String,
+    client_type: &str,
+    target: &ClientHandle,
+    parent: Option<(&ClientHandle, &[usize])>,
+    base: &str,
+) {
+    let taken: Vec<&ClientHandleKey> = match parent {
+        Some((_, extra)) => extra.iter().map(|index| &target.keys[*index]).collect(),
+        None => target.keys.iter().collect(),
+    };
+    let method = constructor_name(base);
+    let bound = target
+        .keys
+        .iter()
+        .map(|key| key.wire_name.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (receiver, receiver_type, client_expr) = match parent {
+        Some((parent, _)) => ("h", parent.name.as_str(), "h.client"),
+        None => ("c", client_type, "c"),
+    };
+    render_wrapped_go_doc_comment(
+        output,
+        "",
+        &match parent {
+            Some(_) => format!(
+                "{method} binds {bound} into a {}: this handle's own members and the ones given here.",
+                target.name
+            ),
+            None => format!("{method} binds {bound} into a {}.", target.name),
+        },
+    );
+    output.push_str("func (");
+    output.push_str(receiver);
+    output.push_str(" *");
+    output.push_str(receiver_type);
+    output.push_str(") ");
+    output.push_str(&method);
+    output.push('(');
+    for (index, key) in taken.iter().enumerate() {
+        if index > 0 {
+            output.push_str(", ");
+        }
+        output.push_str(&key_field(key));
+        output.push(' ');
+        output.push_str(&key.type_name);
+    }
+    output.push_str(") *");
+    output.push_str(&target.name);
+    output.push_str(" {\n\treturn &");
+    output.push_str(&target.name);
+    output.push_str("{\n\t\tclient: ");
+    output.push_str(client_expr);
+    output.push_str(",\n");
+    for key in &target.keys {
+        let field = key_field(key);
+        output.push_str("\t\t");
+        output.push_str(&field);
+        output.push_str(": ");
+        if taken.iter().any(|given| given.wire_name == key.wire_name) {
+            output.push_str(&field);
+        } else {
+            output.push_str("h.");
+            output.push_str(&field);
+        }
+        output.push_str(",\n");
+    }
+    output.push_str("\t}\n}\n\n");
+}
+
+fn render_handle(output: &mut String, service: &ClientService, handle: &ClientHandle) {
+    let client_type = client_type_name(service);
+    let bound = handle
+        .keys
+        .iter()
+        .map(|key| key.wire_name.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
+    render_wrapped_go_doc_comment(
+        output,
+        "",
+        &format!(
+            "{} binds {bound} for the {} service. Every method posts through the {client_type} \
+             it was built from with the bound members filled in, so a caller states a stream's \
+             identity once. The flat caller stays available for a call that spells every \
+             member out.",
+            handle.name, service.wire_name
+        ),
+    );
+    output.push_str("type ");
+    output.push_str(&handle.name);
+    output.push_str(" struct {\n\tclient *");
+    output.push_str(&client_type);
+    output.push('\n');
+    for key in &handle.keys {
+        output.push('\t');
+        output.push_str(&key_field(key));
+        output.push(' ');
+        output.push_str(&key.type_name);
+        output.push('\n');
+    }
+    output.push_str("}\n\n");
+
+    render_handle_constructor(output, &client_type, handle, None, &handle.constructor_base);
+
+    for index in &handle.operations {
+        let operation = &service.operations[*index];
+        let Some(input) = &operation.input else {
+            continue;
+        };
+        render_handle_method(output, handle, operation, input, None);
+        if let Some(long_poll) = &operation.long_poll
+            && let Some(model_output) = &operation.output
+        {
+            render_handle_method(
+                output,
+                handle,
+                operation,
+                input,
+                Some((long_poll, model_output)),
+            );
+        }
+    }
+    for child in &handle.children {
+        render_handle_constructor(
+            output,
+            &client_type,
+            &service.handles[child.handle],
+            Some((handle, &child.extra_keys)),
+            &child.constructor_base,
+        );
+    }
+}
+
+/// One operation as a handle method. Go has one request struct per operation,
+/// so the method takes it whole and overwrites the bound members rather than
+/// declaring a struct per handle and operation; what the caller put in those
+/// fields is replaced, which the doc comment says.
+fn render_handle_method(
+    output: &mut String,
+    handle: &ClientHandle,
+    operation: &ClientOperation,
+    input: &ClientModel,
+    long_poll: Option<(&ClientLongPoll, &ClientModel)>,
+) {
+    let method = match long_poll {
+        Some((long_poll, model_output)) => {
+            long_poll_method_name(operation, long_poll, model_output)
+        }
+        None => operation.name.clone(),
+    };
+    let bound = handle
+        .keys
+        .iter()
+        .map(|key| member_field(input.member(&key.wire_name), &key.wire_name))
+        .collect::<Vec<_>>();
+    render_wrapped_go_doc_comment(
+        output,
+        "",
+        &format!(
+            "{method} posts through the caller with the bound {} filled in from this handle, \
+             replacing whatever request carries in those fields.",
+            bound.join(", ")
+        ),
+    );
+    output.push_str("func (h *");
+    output.push_str(&handle.name);
+    output.push_str(") ");
+    output.push_str(&method);
+    output.push_str("(ctx context.Context, request ");
+    output.push_str(&input.type_name);
+    if long_poll.is_some() {
+        output.push_str(", deadline time.Duration");
+    }
+    output.push_str(") (");
+    if let Some(model_output) = &operation.output {
+        output.push_str(&model_output.type_name);
+        output.push_str(", ");
+    }
+    output.push_str("error) {\n");
+    for (key, field) in handle.keys.iter().zip(&bound) {
+        output.push_str("\trequest.");
+        output.push_str(field);
+        output.push_str(" = h.");
+        output.push_str(&key_field(key));
+        output.push('\n');
+    }
+    output.push_str("\treturn h.client.");
+    output.push_str(&method);
+    output.push_str("(ctx, request");
+    if long_poll.is_some() {
+        output.push_str(", deadline");
+    }
+    output.push_str(")\n}\n\n");
 }
 
 fn render_imports(output: &mut String, plan: &ClientPlan) {

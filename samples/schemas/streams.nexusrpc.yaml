@@ -1,8 +1,9 @@
 nexusrpc: "1.0.0"
 $schema: https://json-schema.org/draft/2020-12/schema
 description: >
-  A stream endpoint, exercising the three streaming annotations: an opaque
-  cursor type, codec-owned payloads, and a long-pollable read.
+  A stream endpoint, exercising the streaming annotations: an opaque cursor
+  type, codec-owned payloads, a long-pollable read, and two handles: one over a
+  workflow's streams and one over a producer on one of them.
 services:
   StreamService:
     fqn: example.streams.v1.StreamService
@@ -10,6 +11,9 @@ services:
       Append records to a workflow's stream and read them back. Reads hand out
       batches and an append carries one batch per call, because a call per
       record costs too much for a token stream.
+    x-nexus-handle:
+      WorkflowStreams: [workflowId]
+      StreamProducer: [workflowId, stream, producerId, attempt]
     operations:
       append:
         fqn: append
