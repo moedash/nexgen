@@ -88,10 +88,10 @@ $defs:
     x-nexus-stream-ref: true
     properties:
       owner: { type: string, enum: [workflow, activity, standalone] }
-      workflow_id: { type: string }
-      run_id: { type: string }
-      activity_id: { type: string }
-      stream_id: { type: string }
+      workflow_id: { oneOf: [{ type: string }, { type: "null" }] }
+      run_id: { oneOf: [{ type: string }, { type: "null" }] }
+      activity_id: { oneOf: [{ type: string }, { type: "null" }] }
+      stream_id: { oneOf: [{ type: string }, { type: "null" }] }
       topic: { type: string }
     required: [owner, topic]
     additionalProperties: false
@@ -444,7 +444,7 @@ $defs:
 "##;
 
 /// Drives the handles against an httptest server and checks what reached it:
-/// the bound members, injected over whatever the request carried.
+/// the bound members beside the free ones the per-handle request carried.
 const GO_HANDLE_DRIVER: &str = r#"package handles
 
 import (
@@ -474,11 +474,11 @@ func TestHandlesBindTheirKeys(t *testing.T) {
 	client := NewStreamServiceHTTPClient(server.URL, nil)
 	stream := client.Stream("wf-1", "scores")
 	producer := stream.Producer("model", 2)
-	if _, err := producer.Append(context.Background(), AppendInput{WorkflowID: "ignored", BatchIndex: 1}); err != nil {
+	if _, err := producer.Append(context.Background(), StreamProducerAppendRequest{BatchIndex: 1}); err != nil {
 		t.Fatal(err)
 	}
 	after := "t1"
-	if _, err := stream.Read(context.Background(), ReadInput{AfterToken: &after}); err != nil {
+	if _, err := stream.Read(context.Background(), StreamHandleReadRequest{AfterToken: &after}); err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) != 2 {

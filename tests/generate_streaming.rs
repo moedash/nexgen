@@ -901,10 +901,10 @@ $defs:
     description: "A stream: its owner and the topic on it."
     properties:
       owner: { type: string, enum: [workflow, activity, standalone] }
-      workflow_id: { type: string }
-      run_id: { type: string }
-      activity_id: { type: string }
-      stream_id: { type: string }
+      workflow_id: { oneOf: [{ type: string }, { type: "null" }] }
+      run_id: { oneOf: [{ type: string }, { type: "null" }] }
+      activity_id: { oneOf: [{ type: string }, { type: "null" }] }
+      stream_id: { oneOf: [{ type: string }, { type: "null" }] }
       topic: { type: string }
     required: [owner, topic]
     additionalProperties: false
@@ -1079,9 +1079,45 @@ $defs:
         x-nexus-stream-ref: true
         properties:
           topic: { type: string }
+        required: [topic]
         additionalProperties: false
     additionalProperties: false
 "##;
+
+/// A reference whose optional member is a plain string: the SDK would write
+/// null for it and the converter would refuse that.
+const PLAIN_OPTIONAL_STREAM_REF_CONTRACT: &str = r##"
+nexusrpc: "1.0.0"
+services:
+  ScoresService:
+    fqn: example.scores.v1.ScoresService
+    operations:
+      startGame:
+        fqn: startGame
+        output: { $ref: "#/$defs/StreamRef" }
+$defs:
+  StreamRef:
+    type: object
+    x-nexus-stream-ref: true
+    properties:
+      topic: { type: string }
+      run_id: { type: string }
+    required: [topic]
+    additionalProperties: false
+"##;
+
+#[test]
+fn a_stream_ref_with_a_plain_optional_member_is_refused() {
+    let message = refusal(
+        PLAIN_OPTIONAL_STREAM_REF_CONTRACT,
+        "streaming-stream-ref-plain-optional",
+    );
+    assert!(
+        message
+            .contains("`x-nexus-stream-ref` requires the optional member `run_id` to be nullable"),
+        "{message}"
+    );
+}
 
 #[test]
 fn a_stream_ref_needs_a_closed_model_with_members() {
@@ -1255,17 +1291,24 @@ fn go_projects_handles_over_the_flat_caller() {
     assert!(client.contains("type StreamHandle struct {\n\tclient *StreamServiceHTTPClient\n\tworkflowID string\n\tstream string\n}"), "{client}");
     assert!(client.contains("func (c *StreamServiceHTTPClient) Stream(workflowID string, stream string) *StreamHandle {"), "{client}");
     assert!(client.contains("func (c *StreamServiceHTTPClient) StreamProducer(workflowID string, stream string, producerID string, attempt int64) *StreamProducer {"), "{client}");
-    // Go has one request struct per operation, so the handle method takes it
-    // whole and overwrites the bound fields before posting.
-    assert!(client.contains("func (h *StreamHandle) Read(ctx context.Context, request ReadInput) (ReadOutput, error) {\n\trequest.WorkflowID = h.workflowID\n\trequest.Stream = h.stream\n\treturn h.client.Read(ctx, request)\n}"), "{client}");
-    assert!(client.contains("func (h *StreamHandle) ReadUntilRecords(ctx context.Context, request ReadInput, deadline time.Duration) (ReadOutput, error) {"), "{client}");
+    // A per-handle request type drops the bound members, and the method
+    // builds the operation's own input from both.
+    assert!(
+        client.contains(
+            "type StreamHandleReadRequest struct {\n\tAfterToken *string\n\tWaitMs *int64\n}"
+        ),
+        "{client}"
+    );
+    assert!(client.contains("func (h *StreamHandle) Read(ctx context.Context, request StreamHandleReadRequest) (ReadOutput, error) {\n\tfull := ReadInput{\n\t\tWorkflowID: h.workflowID,\n\t\tStream: h.stream,\n\t\tAfterToken: request.AfterToken,\n\t\tWaitMs: request.WaitMs,\n\t}\n\treturn h.client.Read(ctx, full)\n}"), "{client}");
+    assert!(client.contains("func (h *StreamHandle) ReadUntilRecords(ctx context.Context, request StreamHandleReadRequest, deadline time.Duration) (ReadOutput, error) {"), "{client}");
     assert!(
         client.contains(
             "func (h *StreamHandle) Producer(producerID string, attempt int64) *StreamProducer {"
         ),
         "{client}"
     );
-    assert!(client.contains("func (h *StreamProducer) Append(ctx context.Context, request AppendInput) (AppendOutput, error) {\n\trequest.WorkflowID = h.workflowID\n\trequest.Stream = h.stream\n\trequest.ProducerID = h.producerID\n\trequest.Attempt = h.attempt\n"), "{client}");
+    assert!(client.contains("type StreamProducerAppendRequest struct {\n\tBatchIndex int64\n\tPayloads [][]byte\n\tFinish *bool\n}"), "{client}");
+    assert!(client.contains("func (h *StreamProducer) Append(ctx context.Context, request StreamProducerAppendRequest) (AppendOutput, error) {\n\tfull := AppendInput{\n\t\tWorkflowID: h.workflowID,\n\t\tStream: h.stream,\n\t\tProducerID: h.producerID,\n\t\tAttempt: h.attempt,\n\t\tBatchIndex: request.BatchIndex,\n"), "{client}");
     assert!(!client.contains("func (h *StreamHandle) Ping("), "{client}");
     fs::remove_dir_all(temp_dir).unwrap();
 }

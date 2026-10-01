@@ -1883,8 +1883,8 @@ pub(in crate::generator) fn client_plan(
             model.model_name.clone(),
         );
     }
-    let member = |property: &Value, required: bool| -> Result<String> {
-        member_go_type(property, required, &model_names)
+    let member = |model_name: &str, json_name: &str, property: &Value, required: bool| {
+        member_go_type(model_name, json_name, property, required, &model_names)
     };
     build_client_plan(
         api_plan,
@@ -5766,6 +5766,8 @@ fn go_map_shape(
 /// The field type a member takes on a generated struct, for a handle that
 /// binds the member or takes it as a parameter: the models file's own rule.
 pub(in crate::generator) fn member_go_type(
+    model_name: &str,
+    json_name: &str,
     property: &Value,
     required: bool,
     model_names: &BTreeMap<String, String>,
@@ -5775,7 +5777,7 @@ pub(in crate::generator) fn member_go_type(
             path: PathBuf::from("<go-client>"),
             reason: format!("failed to read a handle member's schema: {error}"),
         })?;
-    go_property_type("Handle", "", &schema, required, model_names)
+    go_property_type(model_name, json_name, &schema, required, model_names)
 }
 
 fn go_property_type(

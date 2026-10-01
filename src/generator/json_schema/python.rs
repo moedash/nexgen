@@ -480,6 +480,8 @@ impl ModelBackend {
 /// module's own rule for the dataclass field and its initializer parameter,
 /// so the handle hands the model exactly what the field holds.
 pub(in crate::generator) fn member_parameter_annotation(
+    _model_name: &str,
+    _json_name: &str,
     property: &Value,
     required: bool,
 ) -> Result<String> {

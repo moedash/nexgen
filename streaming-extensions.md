@@ -224,11 +224,12 @@ The rules:
 whose `__init__` takes the caller and the keys, whose operation methods take
 the free members as keyword parameters and post through the caller, and
 whose constructors sit on the caller and on parent handles. Go: one struct
-per handle; because Go has one request struct per operation, a handle
-method takes it whole and overwrites the bound fields before posting, which
-its doc comment says, rather than declaring a struct per handle and
-operation. Both ride behind `--client`. The other targets accept the keyword
-and emit nothing for it.
+per handle and, per joined operation, a request type that is the
+operation's input without the bound members (`StreamHandleReadRequest`);
+the method builds the operation's own input from the handle's keys and that
+request, so the bound members leave the signature there too. Both ride
+behind `--client`. The other targets accept the keyword and emit nothing
+for it.
 
 **What the loader refuses.** A handle no operation joins; two handles over
 one key set; a key the joining operations declare differently (a handle
@@ -294,8 +295,9 @@ the Python backend do the same, or should a caller keep reaching inside?
 - A handle key is a top-level member of the input. A member of a nested
   model (`stream.workflow_id`) cannot be a key; the stream reference binds
   the whole `stream` member instead.
-- Go handle methods overwrite the bound fields of the request struct rather
-  than dropping them from the signature.
+- A Go handle's loop method shares the per-handle request type with the
+  single-shot method, so the wait member stays in it and the loop overwrites
+  it; the Python loop method leaves it out of its signature.
 - The cursor type name is not checked against the model names it shares a
   namespace with.
 - A stream reference's members are not checked against the SDK type's
@@ -306,6 +308,6 @@ the Python backend do the same, or should a caller keep reaching inside?
   marked and the front maps the wire model onto the SDK type by hand.
 - The SDK writes `null` for an unset reference member, and the generated
   converter refuses an explicit `null` on a member not declared nullable,
-  so a marked model declares its optional members
-  `oneOf: [{type: string}, {type: "null"}]`. The loader does not require
-  that yet; the live demo's contract does it by hand.
+  so a marked model has to declare its optional members
+  `oneOf: [{type: string}, {type: "null"}]`; the loader refuses a plain
+  optional member on a marked model.

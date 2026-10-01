@@ -169,8 +169,12 @@ impl ClientHandle {
 
 /// How a target types one input member when a handle method takes it as a
 /// parameter or stores it as a key: the models module's own rule, so the
-/// handle hands the model exactly what its field holds.
-pub(in crate::generator) type MemberTyping<'a> = &'a dyn Fn(&Value, bool) -> Result<String>;
+/// handle hands the model exactly what its field holds. The arguments are the
+/// model's emitted name, the member's wire name, its schema and whether it is
+/// required; a target that names closed-value types after the model needs the
+/// first two.
+pub(in crate::generator) type MemberTyping<'a> =
+    &'a dyn Fn(&str, &str, &Value, bool) -> Result<String>;
 
 #[derive(Debug, Clone)]
 pub(in crate::generator) struct ClientService {
@@ -270,6 +274,10 @@ pub(in crate::generator) fn build_client_plan(
                         .collect::<BTreeSet<_>>()
                 })
                 .unwrap_or_default();
+            let type_name = resolved_names
+                .get(&json_type.full_name)
+                .cloned()
+                .unwrap_or_else(|| json_type.model_name.clone());
             let mut parameter_types = BTreeMap::new();
             if let Some(properties) = json_type
                 .schema
@@ -279,15 +287,17 @@ pub(in crate::generator) fn build_client_plan(
                 for (name, property) in properties {
                     parameter_types.insert(
                         name.clone(),
-                        (naming.member)(property, required.contains(name.as_str()))?,
+                        (naming.member)(
+                            &type_name,
+                            name,
+                            property,
+                            required.contains(name.as_str()),
+                        )?,
                     );
                 }
             }
             Ok(Some(ClientModel {
-                type_name: resolved_names
-                    .get(&json_type.full_name)
-                    .cloned()
-                    .unwrap_or_else(|| json_type.model_name.clone()),
+                type_name,
                 model_name: json_type.model_name.clone(),
                 schema: json_type.schema.clone(),
                 facts: facts

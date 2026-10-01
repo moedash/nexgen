@@ -426,25 +426,65 @@ func (c *StreamServiceHTTPClient) WorkflowStreams(workflowID string) *WorkflowSt
 	}
 }
 
-// Append posts through the caller with the bound WorkflowID filled in from this handle,
-// replacing whatever request carries in those fields.
-func (h *WorkflowStreams) Append(ctx context.Context, request AppendInput) (AppendOutput, error) {
-	request.WorkflowID = h.workflowID
-	return h.client.Append(ctx, request)
+// WorkflowStreamsAppendRequest is a AppendInput without the members a WorkflowStreams
+// binds. It is not a wire type: the handle copies it into a AppendInput with the bound
+// members filled in.
+type WorkflowStreamsAppendRequest struct {
+	Stream     string
+	ProducerID string
+	Attempt    int64
+	BatchIndex int64
+	Payloads   [][]byte
+	Finish     *bool
 }
 
-// Read posts through the caller with the bound WorkflowID filled in from this handle,
-// replacing whatever request carries in those fields.
-func (h *WorkflowStreams) Read(ctx context.Context, request ReadInput) (ReadOutput, error) {
-	request.WorkflowID = h.workflowID
-	return h.client.Read(ctx, request)
+// Append posts through the caller with the bound WorkflowID filled in from this handle.
+func (h *WorkflowStreams) Append(ctx context.Context, request WorkflowStreamsAppendRequest) (AppendOutput, error) {
+	full := AppendInput{
+		WorkflowID: h.workflowID,
+		Stream:     request.Stream,
+		ProducerID: request.ProducerID,
+		Attempt:    request.Attempt,
+		BatchIndex: request.BatchIndex,
+		Payloads:   request.Payloads,
+		Finish:     request.Finish,
+	}
+	return h.client.Append(ctx, full)
+}
+
+// WorkflowStreamsReadRequest is a ReadInput without the members a WorkflowStreams
+// binds. It is not a wire type: the handle copies it into a ReadInput with the bound
+// members filled in.
+type WorkflowStreamsReadRequest struct {
+	Stream     *string
+	AfterToken *string
+	MaxRecords *int64
+	WaitMs     *int64
+}
+
+// Read posts through the caller with the bound WorkflowID filled in from this handle.
+func (h *WorkflowStreams) Read(ctx context.Context, request WorkflowStreamsReadRequest) (ReadOutput, error) {
+	full := ReadInput{
+		WorkflowID: h.workflowID,
+		Stream:     request.Stream,
+		AfterToken: request.AfterToken,
+		MaxRecords: request.MaxRecords,
+		WaitMs:     request.WaitMs,
+	}
+	return h.client.Read(ctx, full)
 }
 
 // ReadUntilRecords posts through the caller with the bound WorkflowID filled in from
-// this handle, replacing whatever request carries in those fields.
-func (h *WorkflowStreams) ReadUntilRecords(ctx context.Context, request ReadInput, deadline time.Duration) (ReadOutput, error) {
-	request.WorkflowID = h.workflowID
-	return h.client.ReadUntilRecords(ctx, request, deadline)
+// this handle.
+func (h *WorkflowStreams) ReadUntilRecords(ctx context.Context, request WorkflowStreamsReadRequest, deadline time.Duration) (ReadOutput, error) {
+	full := ReadInput{
+		WorkflowID: h.workflowID,
+		Stream:     request.Stream,
+		AfterToken: request.AfterToken,
+		MaxRecords: request.MaxRecords,
+		WaitMs:     request.WaitMs,
+	}
+	return h.client.ReadUntilRecords(ctx, full, deadline)
 }
 
 // StreamProducer binds workflowId, stream, producerId, attempt into a StreamProducer:
@@ -483,13 +523,26 @@ func (c *StreamServiceHTTPClient) StreamProducer(workflowID string, stream strin
 	}
 }
 
+// StreamProducerAppendRequest is a AppendInput without the members a StreamProducer
+// binds. It is not a wire type: the handle copies it into a AppendInput with the bound
+// members filled in.
+type StreamProducerAppendRequest struct {
+	BatchIndex int64
+	Payloads   [][]byte
+	Finish     *bool
+}
+
 // Append posts through the caller with the bound WorkflowID, Stream, ProducerID,
-// Attempt filled in from this handle, replacing whatever request carries in those
-// fields.
-func (h *StreamProducer) Append(ctx context.Context, request AppendInput) (AppendOutput, error) {
-	request.WorkflowID = h.workflowID
-	request.Stream = h.stream
-	request.ProducerID = h.producerID
-	request.Attempt = h.attempt
-	return h.client.Append(ctx, request)
+// Attempt filled in from this handle.
+func (h *StreamProducer) Append(ctx context.Context, request StreamProducerAppendRequest) (AppendOutput, error) {
+	full := AppendInput{
+		WorkflowID: h.workflowID,
+		Stream:     h.stream,
+		ProducerID: h.producerID,
+		Attempt:    h.attempt,
+		BatchIndex: request.BatchIndex,
+		Payloads:   request.Payloads,
+		Finish:     request.Finish,
+	}
+	return h.client.Append(ctx, full)
 }

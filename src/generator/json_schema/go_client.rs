@@ -251,6 +251,7 @@ fn render_handle(output: &mut String, service: &ClientService, handle: &ClientHa
         let Some(input) = &operation.input else {
             continue;
         };
+        render_handle_request_type(output, handle, operation, input);
         render_handle_method(output, handle, operation, input, None);
         if let Some(long_poll) = &operation.long_poll
             && let Some(model_output) = &operation.output
@@ -275,10 +276,51 @@ fn render_handle(output: &mut String, service: &ClientService, handle: &ClientHa
     }
 }
 
-/// One operation as a handle method. Go has one request struct per operation,
-/// so the method takes it whole and overwrites the bound members rather than
-/// declaring a struct per handle and operation; what the caller put in those
-/// fields is replaced, which the doc comment says.
+/// The request type a handle method takes for one operation: the operation's
+/// input without the members the handle binds. It is not a wire type; the
+/// method copies it into the operation's own input with the bound members
+/// filled in, so the model's converter runs once, on the whole request.
+fn handle_request_type_name(handle: &ClientHandle, operation: &ClientOperation) -> String {
+    format!("{}{}Request", handle.name, operation.name)
+}
+
+fn render_handle_request_type(
+    output: &mut String,
+    handle: &ClientHandle,
+    operation: &ClientOperation,
+    input: &ClientModel,
+) {
+    let type_name = handle_request_type_name(handle, operation);
+    let free: Vec<(&str, &Value)> = input
+        .members()
+        .into_iter()
+        .filter(|(wire, _)| !handle.binds(wire))
+        .collect();
+    render_wrapped_go_doc_comment(
+        output,
+        "",
+        &format!(
+            "{type_name} is a {} without the members a {} binds. It is not a wire type: the \
+             handle copies it into a {} with the bound members filled in.",
+            input.type_name, handle.name, input.type_name
+        ),
+    );
+    output.push_str("type ");
+    output.push_str(&type_name);
+    output.push_str(" struct {\n");
+    for (wire, member) in &free {
+        output.push('\t');
+        output.push_str(&member_field(Some(member), wire));
+        output.push(' ');
+        output.push_str(&input.member_type(wire).unwrap_or_default());
+        output.push('\n');
+    }
+    output.push_str("}\n\n");
+}
+
+/// One operation as a handle method: it takes the per-handle request type,
+/// builds the operation's input from the bound members and the free ones, and
+/// posts through the flat caller so codec and transport live in one place.
 fn render_handle_method(
     output: &mut String,
     handle: &ClientHandle,
@@ -292,6 +334,7 @@ fn render_handle_method(
         }
         None => operation.name.clone(),
     };
+    let request_type = handle_request_type_name(handle, operation);
     let bound = handle
         .keys
         .iter()
@@ -301,8 +344,7 @@ fn render_handle_method(
         output,
         "",
         &format!(
-            "{method} posts through the caller with the bound {} filled in from this handle, \
-             replacing whatever request carries in those fields.",
+            "{method} posts through the caller with the bound {} filled in from this handle.",
             bound.join(", ")
         ),
     );
@@ -311,7 +353,7 @@ fn render_handle_method(
     output.push_str(") ");
     output.push_str(&method);
     output.push_str("(ctx context.Context, request ");
-    output.push_str(&input.type_name);
+    output.push_str(&request_type);
     if long_poll.is_some() {
         output.push_str(", deadline time.Duration");
     }
@@ -320,17 +362,30 @@ fn render_handle_method(
         output.push_str(&model_output.type_name);
         output.push_str(", ");
     }
-    output.push_str("error) {\n");
+    output.push_str("error) {\n\tfull := ");
+    output.push_str(&input.type_name);
+    output.push_str("{\n");
     for (key, field) in handle.keys.iter().zip(&bound) {
-        output.push_str("\trequest.");
+        output.push_str("\t\t");
         output.push_str(field);
-        output.push_str(" = h.");
+        output.push_str(": h.");
         output.push_str(&key_field(key));
-        output.push('\n');
+        output.push_str(",\n");
     }
-    output.push_str("\treturn h.client.");
+    for (wire, member) in input.members() {
+        if handle.binds(wire) {
+            continue;
+        }
+        let field = member_field(Some(member), wire);
+        output.push_str("\t\t");
+        output.push_str(&field);
+        output.push_str(": request.");
+        output.push_str(&field);
+        output.push_str(",\n");
+    }
+    output.push_str("\t}\n\treturn h.client.");
     output.push_str(&method);
-    output.push_str("(ctx, request");
+    output.push_str("(ctx, full");
     if long_poll.is_some() {
         output.push_str(", deadline");
     }

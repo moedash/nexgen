@@ -567,10 +567,47 @@ fn validate_nexus_annotations(path: &Path, schema: &Schema, context: &str) -> Re
                     "`{NEXUS_STREAM_REF_KEYWORD}` requires `additionalProperties: false`; a stream reference has no member the SDK type would not know"
                 ));
             }
+            // The SDK writes null for every member its reference leaves unset,
+            // and a converter refuses an explicit null on a member the contract
+            // did not make nullable, so the two would not round-trip.
+            let required = schema
+                .required
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            for (name, property) in schema.properties.iter().flatten() {
+                if !required.contains(name.as_str()) && !schema_admits_null(property) {
+                    return reject(format!(
+                        "`{NEXUS_STREAM_REF_KEYWORD}` requires the optional member `{name}` to be nullable, as `oneOf: [{{type: ...}}, {{type: \"null\"}}]`; the SDK writes null for a member its reference leaves unset"
+                    ));
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+/// Whether a member schema takes an explicit `null`: a `type` that lists it,
+/// or a `oneOf` with a null branch.
+fn schema_admits_null(schema: &Schema) -> bool {
+    match schema.ty.as_ref() {
+        Some(Value::String(ty)) if ty == "null" => return true,
+        Some(Value::Array(types)) if types.iter().any(|ty| ty.as_str() == Some("null")) => {
+            return true;
+        }
+        _ => {}
+    }
+    schema
+        .one_of
+        .as_ref()
+        .is_some_and(|branches| branches.iter().any(schema_type_is_null))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -11476,7 +11513,7 @@ $defs:
     x-nexus-stream-ref: true
     properties:
       owner: { type: string, enum: [workflow, activity, standalone] }
-      workflow_id: { type: string }
+      workflow_id: { oneOf: [{ type: string }, { type: "null" }] }
       topic: { type: string }
     required: [owner, topic]
     additionalProperties: false
@@ -11560,6 +11597,7 @@ $defs:
         x-nexus-stream-ref: true
         properties:
           topic: { type: string }
+        required: [topic]
         additionalProperties: false
     additionalProperties: false
 "##,

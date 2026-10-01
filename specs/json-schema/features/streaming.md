@@ -101,13 +101,13 @@ $defs:
     type: object
     x-nexus-stream-ref: true
     properties:
-      owner: { type: string, enum: [workflow, activity, standalone] }
-      workflow_id: { type: string }
-      run_id: { type: string }
-      activity_id: { type: string }
-      stream_id: { type: string }
+      kind: { type: string, enum: [workflow, activity, standalone] }
+      workflow_id: { oneOf: [{ type: string }, { type: "null" }] }
+      run_id: { oneOf: [{ type: string }, { type: "null" }] }
+      activity_id: { oneOf: [{ type: string }, { type: "null" }] }
+      stream_id: { oneOf: [{ type: string }, { type: "null" }] }
       topic: { type: string }
-    required: [owner, topic]
+    required: [kind, topic]
     additionalProperties: false
 ```
 
@@ -129,25 +129,26 @@ hoisted model (`ReadInputStream` for a `stream` member of `ReadInput`);
 a `$defs` entry is how the reference gets the name the SDK type has.
 
 The model must be `type: object` with `properties` and
-`additionalProperties: false`. The SDK type is built from the wire
-members by keyword and read back by attribute, which needs the members
-declared, and a member the reference does not know could only be
-dropped, which a closed object refuses instead. The member names are the
-SDK type's field names, resolved through `x-py-name` like any other; the
-loader does not check them against the SDK, so a mismatch is a type
-error in the generated module rather than a load failure.
+`additionalProperties: false`, and every optional member must be
+nullable (`oneOf: [{type: T}, {type: "null"}]`). The SDK type is built
+from the wire members by keyword and read back by attribute, which needs
+the members declared, and a member the reference does not know could
+only be dropped, which a closed object refuses instead. The SDK writes
+`null` for every member its reference leaves unset, and a converter
+refuses an explicit `null` on a member not declared nullable
+([[nullability]]), so a plain optional member would not round-trip; the
+loader refuses it. The member names are the SDK type's field names,
+resolved through `x-py-name` like any other; the loader does not check
+them against the SDK, so a mismatch is a type error in the generated
+module rather than a load failure.
 
 Python emits `StreamRef: typing.TypeAlias = temporalio.streams.StreamRef`
 in place of the dataclass and imports `temporalio.streams`. The model's
 converter is emitted as for any model and owns the wire form in both
 directions. The SDK type's own JSON encoding is the same members, so an
 operation whose input or output is the reference serializes the same way
-whether the SDK or the generated converter does it, with one condition:
-the SDK writes `null` for an unset member, and an optional member that is
-not declared nullable refuses an explicit `null` ([[nullability]]), so a
-marked model declares its optional members
-`oneOf: [{type: string}, {type: "null"}]`. Go, TypeScript, Java and .NET
-emit the model unchanged.
+whether the SDK or the generated converter does it. Go, TypeScript, Java
+and .NET emit the model unchanged.
 
 ## `x-nexus-handle`
 
@@ -197,9 +198,12 @@ constructor on the same object.
 Python emits one class per handle after the caller: `__init__` takes the
 caller and the keys, each operation method takes the free members as
 keyword parameters and posts through the caller, and constructors are
-methods on the caller and on parent handles. Go has one request struct
-per operation, so a handle method takes it whole and overwrites the bound
-fields before posting, which the doc comment says; constructors are
+methods on the caller and on parent handles. Go emits one struct per
+handle and, per joined operation, a request type that is the operation's
+input without the bound members (`StreamHandleReadRequest`); the method
+builds the operation's own input from the handle's keys and that request,
+so the bound members are dropped from the signature there too and the
+model's converter runs once on the whole request. Constructors are
 methods on the caller and on parent handles. Both sit behind `--client`
 with the callers they project; the other targets accept the keyword and
 emit nothing for it.
